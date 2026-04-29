@@ -188,9 +188,21 @@ class BirdCLEF_EDA_Pipeline:
         Examine la répartition des classes pour visualiser l'effet de longue traîne 
         et exporte les résultats.
         """
+        class_counts = self.df_train["class_name"].value_counts()
+        unique_targets = self.df_train.groupby("class_name")[self.config.target_col].nunique()
+
+        print(f"  [+] Nombre total de catégories uniques : {len(class_counts)}")
+        print("  [+] Effectif total pour chaque classe :")
+        for class_name, count in class_counts.items():
+            print(f"      - {class_name} : {count} audios (regroupe {unique_targets[class_name]} sous-classes uniques)")
+
+        plt.figure(figsize=(16, 6))
+        ax = sns.barplot(x=np.arange(len(class_counts)), y=class_counts.values, color="#2b8cbe")
+
+
         print("\n[*] Génération : Distribution des classes (Long Tail)...")
         class_counts = self.df_train[self.config.target_col].value_counts()
-        
+
         plt.figure(figsize=(16, 6))
         ax = sns.barplot(x=np.arange(len(class_counts)), y=class_counts.values, color="#2b8cbe")
         
@@ -305,7 +317,6 @@ class BirdCLEF_EDA_Pipeline:
         plt.savefig(self.plots_dir / "03_train_multilabel_background.png", dpi=self.config.plot_dpi)
         plt.close()
 
-
     def run(self):
         """
         Exécute séquentiellement toutes les étapes d'analyse de données.
@@ -323,7 +334,7 @@ def main():
     parser = argparse.ArgumentParser(description="Pipeline EDA Rigoureux & Strict (Zéro Data Leakage)")
 
     parser.add_argument("-i", "--input_dir", default="../../../data/birdclef-2026/", help="Dossier contenant les fichiers CSV")
-    parser.add_argument("-o", "--output_dir", default="eda_output/", help="Dossier de destination")
+    parser.add_argument("-o", "--output_dir", default="../../../output/eda_output/", help="Dossier de destination")
 
     parser.add_argument("--target", default="bird_name", help="Colonne cible après mapping taxinomique")
     # Zone de record de recording_location

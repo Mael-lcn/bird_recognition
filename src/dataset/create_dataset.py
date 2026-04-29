@@ -42,6 +42,28 @@ def remove_spatial_outliers_by_species(df, multiplier=2.0):
     return df, initial_len - len(df)
 
 
+def remove_rare_classes(df, min_pct=0.01):
+    """
+    Supprime les classes (espèces) qui représentent moins d'un certain pourcentage 
+    (min_pct) de l'ensemble du dataset.
+    """
+    if 'primary_label' not in df.columns:
+        return df, 0
+
+    initial_len = len(df)
+
+    # Calcule la fréquence de chaque classe
+    class_freq = df['primary_label'].value_counts(normalize=True)
+
+    # Isole les classes qui ont une fréquence >= 1%
+    valid_classes = class_freq[class_freq >= min_pct].index
+
+    # Filtre le dataframe
+    df = df[df['primary_label'].isin(valid_classes)]
+
+    return df, initial_len - len(df)
+
+
 def filter_birdclef_csv(input_path, output_dir):
     """
     Orchestre le processus de nettoyage du jeu de données BirdCLEF. 
@@ -63,14 +85,27 @@ def filter_birdclef_csv(input_path, output_dir):
     df = pd.read_csv(input_path)
     initial_len = len(df)
 
+    # Suppression des audios de mauvaise qualité (rating == 1.0)
+    audio_deleted = 0
+    if 'rating' in df.columns:
+        len_before = len(df)
+        df = df[df['rating'] != 1.0]
+        audio_deleted = len_before - len(df)
+
     # Suppression des enregistrements ne possédant pas de coordonnées géographiques
+    nans_deleted = 0
     if 'latitude' in df.columns and 'longitude' in df.columns:
+        len_before = len(df)
         df = df.dropna(subset=['latitude', 'longitude'])
+        nans_deleted = len_before - len(df)
 
     # Application du filtre d'aberrations spatiales par espèce
     df, outliers_deleted = remove_spatial_outliers_by_species(df, multiplier=3.0)
 
-    # Calcul des "métriques" pour le rapport final
+    min_pct = 0.0001
+    df, rare_classes_deleted = remove_rare_classes(df, min_pct=min_pct)
+
+    # Calcul des stats pour le rapport final
     final_len = len(df)
     total_deleted = initial_len - final_len
     remaining_classes = df['primary_label'].nunique() if 'primary_label' in df.columns else "Inconnu"
@@ -85,8 +120,12 @@ def filter_birdclef_csv(input_path, output_dir):
     print("\n" + "="*50)
     print("Rapport de nettoyage")
     print("="*50)
-    print(f"Lignes supprimées           : {total_deleted:,}".replace(',', ' '))
-    print(f"Dont vrais Outliers GPS     : {outliers_deleted:,}".replace(',', ' '))
+    print(f"Lignes totales supprimées   : {total_deleted:,}".replace(',', ' '))
+    print(f"  ├─ Qualité audio (== 1)   : {audio_deleted:,}".replace(',', ' '))
+    print(f"  ├─ Coordonnées manquantes : {nans_deleted:,}".replace(',', ' '))
+    print(f"  ├─ Outliers géographiques : {outliers_deleted:,}".replace(',', ' '))
+    print(f"  └─ Classes < {min_pct} occurence : {rare_classes_deleted:,}".replace(',', ' '))
+    print("-" * 50)
     print(f"Taille finale du dataset    : {final_len:,} lignes".replace(',', ' '))
     print(f"Classes restantes           : {remaining_classes}")
     print(f"Temps d'exécution           : {exec_time:.3f} s")
