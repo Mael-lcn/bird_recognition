@@ -1,75 +1,140 @@
 import pandas as pd
 import joblib
+import numpy as np
+import torch
 from pathlib import Path
+from tqdm import tqdm
+from torch.utils.data import DataLoader
+
 from config import parse_arguments
-from dataset import build_dataset_mil, prepare_for_mil
-from models import execute_mil_and_cv
-from metrics import print_global_metrics, generate_class_report
+from dataset import FocalAudioDataset, focal_collate_fn, build_soundscape_dataset, prepare_for_mil
+from features import TorchFeatureExtractor
+from models import train_kaggle_pipeline
+from metrics import print_full_report, generate_class_analysis, optimize_f1_thresholds
 
 
 
 def main():
-    """
-    Exécute le flux de travail complet de préparation et d'entraînement.
-    
-    Les étapes principales sont :
-    1. Analyse des arguments en ligne de commande.
-    2. Création de l'architecture des données (Bag of Windows).
-    3. Encodage des étiquettes (labels textuels vers entiers).
-    4. Entraînement via Expectation-Maximization (MIL) couplé à un méta-modèle.
-    5. Génération des rapports de performance globaux et détaillés.
-    6. Exportation des artefacts (modèles et décodeur) pour l'inférence.
-    """
-    # Récupération de la configuration définie par l'utilisateur via le terminal
     args = parse_arguments()
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Création sécurisée du répertoire de destination pour les artefacts
-    Path(args.output).mkdir(parents=True, exist_ok=True)
+    print("\n--- PRÉPARATION DONNÉES FOCALES (Augmentation Conditionnelle) ---")
+    df_focal_meta = pd.read_csv(args.focal_meta)
+    df_snd_labels = pd.read_csv(args.soundscape_labels)
 
-    # Chargement des métadonnées du jeu de données (labels, géographie, etc.)
-    df_meta = pd.read_csv(args.input)
+    # Calcul de l'union des labels
+    all_birds = set()
+    for labels in df_focal_meta['target_multi']:
+        all_birds.update([l for l in str(labels).split(';') if l and l != 'nocall'])
+    for labels in df_snd_labels['target_multi']:
+        all_birds.update([l for l in str(labels).split(';') if l and l != 'nocall'])
+    
+    official_classes = sorted(list(all_birds))
+    print(f"[*] Total des espèces uniques identifiées (Focal + Soundscapes) : {len(official_classes)}")
 
-    # Étape 1 : Parallélisation de l'extraction des caractéristiques (Audio + Géo)
-    # Découpe chaque fichier audio en multiples fenêtres indépendantes
-    df_windows = build_dataset_mil(df_meta, args.audio_dir, args.workers)
-
-    # Étape 2 : Numérisation de la variable cible
-    # L'encodeur transforme les noms d'espèces en identifiants numériques
-    df_prepared, encoder = prepare_for_mil(df_windows)
-
-    # Étape 3 : Apprentissage et Validation
-    # Application de l'algorithme MIL (Expectation-Maximization) pour nettoyer 
-    # le jeu de données, suivi d'un Stacking avec validation croisée
-    final_model, y_clean, oof_preds, oof_proba = execute_mil_and_cv(
-        df_prepared, 
-        encoder, 
-        args.em_iter, 
-        args.top_n, 
-        args.n_splits
+    dataset = FocalAudioDataset(df_focal_meta, args.focal_audio, args.window_sec, args.stride_sec)
+    dataloader = DataLoader(
+        dataset, batch_size=16, shuffle=False, 
+        num_workers=args.workers, collate_fn=focal_collate_fn,
+        pin_memory=True if torch.cuda.is_available() else False
     )
 
-    # Étape 4 : Évaluation et restitution des performances
-    # Les métriques sont calculées sur la base des prédictions "Out-Of-Fold"
-    # uniquement sur les fenêtres considérées comme valides par le modèle (y_clean)
-    print_global_metrics(y_clean, oof_preds, oof_proba, encoder.classes_)
+    extractor_clean = TorchFeatureExtractor(aug_mode="none")
+    extractor_light = TorchFeatureExtractor(aug_mode="noise_light")
+    extractor_heavy = TorchFeatureExtractor(aug_mode="noise_heavy")
 
-    generate_class_report(
-        y_clean, 
-        oof_preds, 
-        oof_proba, 
-        encoder, 
-        f"{args.output}/rapport_mil.csv", 
-        args.verbose
+    csv_temp_path = output_dir / "focal_features_temp.csv"
+    if csv_temp_path.exists(): csv_temp_path.unlink()
+
+    first_batch = True
+    total_chunks = 0
+    device_type = "cuda" if torch.cuda.is_available() else "cpu"
+
+    def extract_safe_microbatch(extractor, chunks):
+        MAX_GPU_CHUNKS = 128
+        lst = []
+        for i in range(0, chunks.shape[0], MAX_GPU_CHUNKS):
+            with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+                lst.append(extractor.extract_features_batch(chunks[i:i+MAX_GPU_CHUNKS]))
+        return np.vstack(lst)
+
+    for batch_chunks, batch_meta in tqdm(dataloader, desc="Extraction GPU"):
+        if batch_chunks.shape[0] == 0: continue
+
+        ratings = np.array([m.get('rating', 3.0) for m in batch_meta])
+        batch_results = []
+
+        # Toujours extraire la version clean
+        feats_c = extract_safe_microbatch(extractor_clean, batch_chunks)
+        for i, meta in enumerate(batch_meta):
+            row = meta.copy()
+            for j, name in enumerate(extractor_clean.feat_names): row[name] = feats_c[i, j]
+            batch_results.append(row)
+
+        # Qualité Moyenne à Parfaite (>= 3.0) : On ajoute le Light Noise
+        idx_light = np.where(ratings >= 3.0)[0]
+        if len(idx_light) > 0:
+            feats_l = extract_safe_microbatch(extractor_light, batch_chunks[idx_light])
+            for idx_enum, i in enumerate(idx_light):
+                row = batch_meta[i].copy()
+                for j, name in enumerate(extractor_light.feat_names): row[name] = feats_l[idx_enum, j]
+                batch_results.append(row)
+
+        # Qualité Parfaite (>= 4.0) : On ajoute le Heavy Noise
+        idx_heavy = np.where(ratings >= 4.0)[0]
+        if len(idx_heavy) > 0:
+            feats_h = extract_safe_microbatch(extractor_heavy, batch_chunks[idx_heavy])
+            for idx_enum, i in enumerate(idx_heavy):
+                row = batch_meta[i].copy()
+                for j, name in enumerate(extractor_heavy.feat_names): row[name] = feats_h[idx_enum, j]
+                batch_results.append(row)
+
+        total_chunks += len(batch_results)
+        df_batch = pd.DataFrame(batch_results)
+        df_batch.to_csv(csv_temp_path, mode='a', header=first_batch, index=False)
+        first_batch = False
+
+    print(f"[+] Extraction terminée ! {total_chunks} chunks conditionnels générés.")
+    
+    df_focal_win = pd.read_csv(csv_temp_path, low_memory=False)
+    for col in df_focal_win.columns:
+        if col not in ['file_id', 'target_multi', 'end_sec', 'rating']:
+            df_focal_win[col] = pd.to_numeric(df_focal_win[col], errors='coerce')
+    df_focal_win = df_focal_win.dropna().reset_index(drop=True)
+    
+    df_focal_win, _, mlb = prepare_for_mil(df_focal_win, official_classes=official_classes)
+
+    print("\n--- PRÉPARATION DONNÉES SOUNDSCAPES ---")
+    df_snd_feat = build_soundscape_dataset(df_snd_labels, args.soundscape_audio)
+
+    print("\n--- ENTRAÎNEMENT DU PIPELINE ---")
+    results = train_kaggle_pipeline(df_focal_win, df_snd_feat, mlb, args.em_iter)
+
+    # Calcul du ROC-AUC global
+    print_full_report(results['val_true'], results['val_prob'], mlb)
+    
+    # Recherche immédiate des seuils optimaux
+    optimal_thresholds = optimize_f1_thresholds(results['val_true'], results['val_prob'], mlb.classes_)
+
+    # Génération de l'analyse en utilisant les seuils qu'on vient de trouver !
+    generate_class_analysis(
+        results['val_true'], 
+        results['val_prob'], 
+        mlb, 
+        output_path=output_dir / "analyse_classes_opti.csv",
+        thresholds=optimal_thresholds
     )
 
-    # Étape 5 : Préservation des résultats
-    # Sauvegarde du méta-modèle et de l'encodeur de labels pour une utilisation 
-    # ultérieure dans le script d'inférence (predict.py)
-    joblib.dump(final_model, f"{args.output}/final_xgb_model.joblib")
-    joblib.dump(encoder, f"{args.output}/label_encoder.joblib")
+    joblib.dump({
+        'base_xgb': results['base_xgb'], 
+        'base_lgb': results['base_lgb'], 
+        'meta': results['meta'],
+        'thresholds': optimal_thresholds
+    }, output_dir / "model_dict.joblib")
 
-    print(f"\n[+] Modèle et Encodeur sauvegardés dans {args.output}/")
-
+    joblib.dump(mlb, output_dir / "label_encoder.joblib")
+    print(f"\n[+] Pipeline terminé. Artefacts dans {output_dir}")
 
 if __name__ == "__main__":
     main()

@@ -1,62 +1,139 @@
+import torch
+import soundfile as sf
+import torchaudio
 import pandas as pd
-from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from tqdm import tqdm
-from sklearn.preprocessing import LabelEncoder
-from features import worker_wrapper_mil
+from torch.utils.data import Dataset
+from sklearn.preprocessing import MultiLabelBinarizer
+from features import TorchFeatureExtractor, SAMPLE_RATE
 
 
 
-def build_dataset_mil(df_meta, audio_dir, n_workers):
-    """
-    Extrait des fenêtres audio en parallèle pour l'apprentissage 
-    Multiple Instance Learning (MIL).
+class FocalAudioDataset(Dataset):
+    def __init__(self, df_meta, audio_dir, window_sec=5, stride_sec=2, vad_threshold=0.0):
+        self.df_meta = df_meta.reset_index(drop=True)
+        self.audio_dir = Path(audio_dir)
+        self.window_sec = window_sec
+        self.stride_sec = stride_sec
+        self.vad_threshold = vad_threshold
 
-    Args:
-        df_meta: DataFrame contenant les métadonnées des fichiers audio à traiter.
-        audio_dir: Chemin vers le répertoire racine contenant les fichiers audio.
-        n_workers: Nombre de coeurs CPU à allouer pour le traitement en parallèle.
-        
-    Returns:
-        Un DataFrame contenant l'ensemble des fenêtres extraites et aplaties, 
-        prêt pour l'entraînement ou l'évaluation.
-    """
-    print(f"[*] Découpage audio (Bag of Windows) sur {n_workers} coeurs...")
+    def __len__(self):
+        return len(self.df_meta)
 
-    # Préparation des tâches contenant les arguments nécessaires pour chaque worker
-    tasks = [(idx, row, audio_dir) for idx, row in df_meta.iterrows()]
+    def __getitem__(self, idx):
+        row = self.df_meta.iloc[idx]
+        file_path = self.audio_dir / row['filename']
 
-    # Lancement de l'exécution parallèle
-    with ProcessPoolExecutor(max_workers=n_workers) as executor:
-        results = list(tqdm(executor.map(worker_wrapper_mil, tasks), total=len(tasks)))
+        valid_chunks, metadata = [], []
 
-    # Aplatissement de la liste de listes (chaque fichier audio retourne N fenêtres)
-    flat_results = [item for sublist in results for item in sublist]
-    df_windows = pd.DataFrame(flat_results)
+        if not file_path.exists():
+            return valid_chunks, metadata
 
-    print(f"[*] Dataset brut généré : {len(df_windows)} fenêtres issues de {df_windows['file_id'].nunique()} fichiers.")
+        try:
+            y_np, sr = sf.read(file_path)
+            y = torch.tensor(y_np, dtype=torch.float32)
 
-    return df_windows
+            if y.ndim > 1: y = y.mean(dim=1) 
+            if sr != SAMPLE_RATE:
+                y = torchaudio.functional.resample(y, sr, SAMPLE_RATE)
 
+            window_samples = self.window_sec * SAMPLE_RATE
+            stride_samples = self.stride_sec * SAMPLE_RATE
+            duration_samples = y.shape[0]
 
-def prepare_for_mil(df_windows):
-    """
-    Initialise l'encodeur de labels et prépare la structure cible pour
-    l'algorithme MIL.
-    
-    Args:
-        df_windows: DataFrame contenant les fenêtres audio et leurs labels textuels.
+            rating = float(row.get('rating', 3.0))
+
+            for start in range(0, duration_samples, stride_samples):
+                end = start + window_samples
+                chunk = y[start:end]
+                
+                if chunk.shape[0] < window_samples:
+                    chunk = torch.nn.functional.pad(chunk, (0, window_samples - chunk.shape[0]))
+
+                rms = torch.sqrt(torch.mean(chunk**2))
+                if rms >= self.vad_threshold:
+                    valid_chunks.append(chunk)
+                    metadata.append({
+                        'file_id': idx,
+                        'target_multi': row['target_multi'],
+                        'rating': rating,
+                        'end_sec': min((start + window_samples) / SAMPLE_RATE, duration_samples / SAMPLE_RATE)
+                    })
+        except Exception:
+            pass 
             
-    Returns:
-        Un tuple contenant :
-            - Le DataFrame original enrichi de la nouvelle colonne numérique 'target'.
-            - L'instance ajustée de l'encodeur (LabelEncoder) pour d'éventuelles 
-              transformations inverses.
-    """
-    print("[*] Encodage des classes pour l'algorithme MIL.")
+        return valid_chunks, metadata
 
-    # Instanciation et ajustement de l'encodeur sur les labels textuels
-    encoder = LabelEncoder()
-    df_windows['target'] = encoder.fit_transform(df_windows['label'])
+def focal_collate_fn(batch):
+    all_chunks, all_meta = [], []
+    for chunks, meta in batch:
+        all_chunks.extend(chunks)
+        all_meta.extend(meta)
+    if not all_chunks:
+        return torch.empty(0), []
+    return torch.stack(all_chunks), all_meta
 
-    # Nous laissons l'algorithme MIL nettoyer les données AVANT de faire un K-Fold
-    return df_windows, encoder
+def build_soundscape_dataset(df_labels, audio_dir):
+    print("[*] Extraction Audio Soundscapes (GPU)...")
+    all_feats = []
+    extractor = TorchFeatureExtractor(aug_mode="none")
+    
+    for filename in tqdm(df_labels['filename'].unique()):
+        path = Path(audio_dir) / filename
+        if not path.exists(): continue
+        
+        try:
+            y_np, sr = sf.read(path)
+            y = torch.tensor(y_np, dtype=torch.float32)
+            if y.ndim > 1: y = y.mean(dim=1)
+            if sr != SAMPLE_RATE: y = torchaudio.functional.resample(y, sr, SAMPLE_RATE)
+        except Exception: continue
+
+        file_labels = df_labels[df_labels['filename'] == filename]
+        window_samples = 5 * SAMPLE_RATE
+        chunks, row_data = [], []
+
+        for _, row in file_labels.iterrows():
+            end_val = str(row['end'])
+            if ':' in end_val:
+                parts = [int(p) for p in end_val.split(':')]
+                end_sec = parts[0] * 3600 + parts[1] * 60 + parts[2] if len(parts) == 3 else parts[0] * 60 + parts[1]
+            else:
+                end_sec = int(float(end_val))
+
+            start_sample = (end_sec - 5) * SAMPLE_RATE
+            end_sample = end_sec * SAMPLE_RATE
+
+            if start_sample >= y.shape[0]: continue
+
+            y_chunk = y[start_sample:end_sample]
+            if y_chunk.shape[0] < window_samples:
+                y_chunk = torch.nn.functional.pad(y_chunk, (0, window_samples - y_chunk.shape[0]))
+
+            chunks.append(y_chunk)
+            row_data.append(row)
+
+        if chunks:
+            chunks_tensor = torch.stack(chunks)
+            feats_matrix = extractor.extract_features_batch(chunks_tensor)
+            
+            for i, r in enumerate(row_data):
+                feat_dict = {extractor.feat_names[j]: feats_matrix[i, j] for j in range(len(extractor.feat_names))}
+                feat_dict['filename'] = filename
+                feat_dict['target_multi'] = r.get('target_multi', 'nocall')
+                all_feats.append(feat_dict)
+
+    return pd.DataFrame(all_feats)
+
+def prepare_for_mil(df_windows, official_classes=None):
+    print("[*] Encodage Multi-Label...")
+    labels_list = [[lbl for lbl in str(x).split(';') if lbl] for x in df_windows['target_multi']]
+    
+    if official_classes is not None:
+        mlb = MultiLabelBinarizer(classes=official_classes)
+    else:
+        mlb = MultiLabelBinarizer()
+        
+    y_multi = mlb.fit_transform(labels_list)
+    return df_windows, y_multi, mlb

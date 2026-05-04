@@ -1,166 +1,103 @@
 import numpy as np
 import torch
 from xgboost import XGBClassifier
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score
+from lightgbm import LGBMClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.model_selection import train_test_split
 
 
 
-def execute_mil_and_cv(df_windows, encoder, n_iter, top_n, n_splits):
-    """
-    Exécute l'entraînement complet basé sur l'apprentissage multi-instances (MIL) 
-    couplé à un mécanisme de Late Fusion (Stacking) avec validation croisée.
+def extract_positive_probas(predict_proba_output):
+    res = []
+    for p in predict_proba_output:
+        if p.shape[1] == 2: res.append(p[:, 1])
+        else: res.append(np.zeros(p.shape[0], dtype=np.float32))
+    return np.array(res).T
 
-    Le processus se déroule en trois phases :
-    1. Purification des données (Expectation-Maximization) : Sélection itérative des 
-       meilleures fenêtres audio par fichier pour éliminer le silence et le bruit.
-    2. Validation Croisée et Stacking : Entraînement d'un modèle audio de base, puis 
-       d'un méta-modèle combinant les prédictions audio aux coordonnées géographiques.
-    3. Entraînement final : Création des modèles de production sur l'ensemble des données purifiées.
-
-    Args:
-        df_windows: Le DataFrame contenant toutes les fenêtres extraites, leurs 
-            caractéristiques acoustiques (MFCC, flatness), spatiales et la cible.
-        encoder: L'instance de l'encodeur de labels pour récupérer les classes.
-        n_iter: Le nombre d'itérations pour la boucle d'Expectation-Maximization.
-        top_n: Le nombre de meilleures fenêtres à retenir par fichier audio.
-        n_splits: Le nombre de plis (folds) pour la validation croisée.
-
-    Returns:
-        Un tuple contenant :
-            - Un dictionnaire avec les modèles finaux ("base" et "meta").
-            - Le tableau des véritables étiquettes des fenêtres purifiées (y_clean).
-            - Le tableau des prédictions fermes (Out-Of-Fold).
-            - La matrice des probabilités continues (Out-Of-Fold).
-    """
-    # Détection automatique de l'accélération matérielle
-    if torch.cuda.is_available():
-        xgb_device = "cuda"
-        print("\n[*] GPU NVIDIA détecté : Accélération CUDA activée pour XGBoost.")
-    else:
-        xgb_device = "cpu"
-        print("\n[*] CPU détecté : Mode classique activé pour XGBoost.")
-
-    # Conservation d'une copie globale indispensable pour évaluer toutes les fenêtres lors de l'EM
-    df_full = df_windows.copy()
-
-    # Isolation exclusive des caractéristiques acoustiques pures pour le modèle de base
-    audio_cols = [c for c in df_full.columns if c.startswith('mfcc') or c == 'flatness']
-
-    # Hyperparamètres spécifiques au modèle d'analyse du signal audio
-    xgb_params_audio = {
-        'objective': 'multi:softprob', 
-        'n_estimators': 350,        
-        'learning_rate': 0.05,      
-        'max_depth': 6,             
-        'tree_method': 'hist',
-        'device': xgb_device,
-        'subsample': 0.8,           
-        'colsample_bytree': 0.7,    
-        'min_child_weight': 5,      
-        'gamma': 0.2,               
-        'n_jobs': -1,
-        'random_state': 42
+def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, n_iter):
+    xgb_device = "cuda" if torch.cuda.is_available() else "cpu"
+    audio_cols = [c for c in df_focal_windows.columns if any(k in c for k in ['mfcc', 'delta', 'centroid', 'zcr', 'bp_ratio'])]
+    
+    xgb_params = {
+        'objective': 'binary:logistic', 'tree_method': 'hist', 'device': xgb_device, 
+        'random_state': 42, 'base_score': 0.5,
+        'max_depth': 5,
+        'colsample_bytree': 0.6,
+        'subsample': 0.8
+    }
+    lgb_params = {
+        'n_estimators': 300, 'learning_rate': 0.05, 'random_state': 42, 'n_jobs': -1,
+        'max_depth': 5, 
+        'colsample_bytree': 0.6, 
+        'subsample': 0.8,
+        'subsample_freq': 1
     }
 
-    # Hyperparamètres spécifiques au méta-modèle (fusion audio + géographie)
-    # L'arbre est moins profond pour éviter le surapprentissage sur les probabilités
-    xgb_params_meta = {
-        'objective': 'multi:softprob', 
-        'n_estimators': 100,        
-        'learning_rate': 0.03,      
-        'max_depth': 3,             
-        'tree_method': 'hist',
-        'device': xgb_device,
-        'subsample': 0.85,          
-        'colsample_bytree': 1.0,    
-        'reg_lambda': 5.0,          
-        'n_jobs': -1,
-        'random_state': 42
-    }
+    print("[*] PHASE 1 : Nettoyage MIL (Instance-Level Disentanglement)...")
+    X_train_audio_full = df_focal_windows[audio_cols].values.astype(np.float32)
+    original_y_train = encoder.transform([[lbl for lbl in str(x).split(';') if lbl] for x in df_focal_windows['target_multi']])
 
-    print(f"\n[*] PHASE 1 : Purification EM guidée par Heuristique")
+    base_xgb = MultiOutputClassifier(XGBClassifier(**xgb_params, n_estimators=300, learning_rate=0.05))
 
-    # Initialisation : Sélection du "top N" basée sur l'énergie maximale (score heuristique)
-    top_initial = df_full.groupby('file_id')['heuristic_score'].nlargest(top_n).index.get_level_values(1)
-    df_train = df_full.loc[top_initial]
-
-    # Boucle d'Expectation-Maximization
-    for iteration in range(1, n_iter + 1):
-        print(f"  > Itération {iteration} ({len(df_train)} fenêtres purifiées utilisées)...")
+    curr_X_train = X_train_audio_full
+    curr_y_train = original_y_train
+    
+    for i in range(n_iter):
+        base_xgb.fit(curr_X_train, curr_y_train)
+        probas = extract_positive_probas(base_xgb.predict_proba(X_train_audio_full))
         
-        X_audio_train = df_train[audio_cols]
-        y_train = df_train['target'].values 
+        selected_mask = np.zeros(len(X_train_audio_full), dtype=bool)
+        new_y_pure = np.zeros((len(X_train_audio_full), original_y_train.shape[1]), dtype=np.float32)
+        
+        for _, group in df_focal_windows.groupby('file_id'):
+            g_idx = group.index.values
+            y_true_group = original_y_train[g_idx[0]]
+            true_classes = np.where(y_true_group == 1)[0]
 
-        # Phase de Maximisation : Entraînement du modèle sur les fenêtres supposées contenir l'oiseau
-        model_audio = XGBClassifier(**xgb_params_audio)
-        model_audio.fit(X_audio_train, y_train)
+            if len(true_classes) == 0: continue
 
-        # On arrête l'évaluation si on a atteint la dernière itération pour économiser du temps
-        if iteration == n_iter:
-            break 
+            for c in true_classes:
+                p_c = probas[g_idx, c]
+                sorted_args = np.argsort(p_c)[::-1]
+                sorted_probs = p_c[sorted_args]
+                diffs = np.abs(np.diff(sorted_probs))
+                
+                elbow_idx = np.argmax(diffs) + 1 if len(diffs) > 0 else 1
+                max_allowed_chunks = max(4, len(g_idx) // 2) 
+                keep_n = max(1, min(elbow_idx, max_allowed_chunks))
+                
+                selected_chunk_idx = g_idx[sorted_args[:keep_n]]
+                
+                selected_mask[selected_chunk_idx] = True
+                new_y_pure[selected_chunk_idx, c] = 1
+                    
+        curr_X_train = X_train_audio_full[selected_mask]
+        curr_y_train = new_y_pure[selected_mask]
+        print(f"    -> Itération {i+1} : Extraction de {selected_mask.sum()} chunks PURES uniques.")
 
-        # Phase d'Expectation : On réévalue absolument toutes les fenêtres avec le modèle mis à jour
-        X_audio_full = df_full[audio_cols]
-        y_full = df_full['target'].values
-        probas_full = model_audio.predict_proba(X_audio_full)
+    print("[*] Entraînement final du duo sur les extraits purs...")
+    base_xgb.fit(curr_X_train, curr_y_train)
+    base_lgb = MultiOutputClassifier(LGBMClassifier(**lgb_params))
+    base_lgb.fit(curr_X_train, curr_y_train)
 
-        # Extraction de la probabilité attribuée à la classe théorique du fichier
-        df_full['score_oiseau'] = probas_full[np.arange(len(y_full)), y_full]
+    print("[*] PHASE 2 : Calibration Méta-Modèle (Random Forest)...")
+    y_soundscape_multi = encoder.transform([[lbl for lbl in str(x).split(';') if lbl] for x in df_soundscapes_feat['target_multi']])
 
-        # Mise à jour de la vérité terrain : on garde les fenêtres où le modèle est le plus confiant
-        idx_to_keep = df_full.groupby('file_id')['score_oiseau'].nlargest(top_n).index.get_level_values(1)
-        df_train = df_full.loc[idx_to_keep]
+    X_val_xgb = extract_positive_probas(base_xgb.predict_proba(df_soundscapes_feat[audio_cols].values))
+    X_val_lgb = extract_positive_probas(base_lgb.predict_proba(df_soundscapes_feat[audio_cols].values))
+    X_all_base = np.hstack([X_val_xgb, X_val_lgb])
 
+    unique_files = df_soundscapes_feat['filename'].unique()
+    train_files, val_files = train_test_split(unique_files, test_size=0.2, random_state=42)
 
-    print(f"\n[*] PHASE 2 : Méta-Modélisation (Late Fusion Audio + Geo)")
+    train_mask = df_soundscapes_feat['filename'].isin(train_files)
+    val_mask = df_soundscapes_feat['filename'].isin(val_files)
+    
+    meta_model = MultiOutputClassifier(
+        RandomForestClassifier(n_estimators=50, max_depth=2, min_samples_leaf=10, max_features=None, random_state=42, n_jobs=-1)
+    )
+    meta_model.fit(X_all_base[train_mask], y_soundscape_multi[train_mask])
 
-    # Préparation des données purifiées (sans le bruit/silence)
-    X_clean_audio = df_train[audio_cols]
-    X_geo = df_train[['geo_latitude', 'geo_longitude']]
-    y_clean = df_train['target'].values
-
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    oof_preds = np.zeros(len(y_clean))
-    oof_proba = np.zeros((len(y_clean), len(encoder.classes_)), dtype=np.float32)
-
-    # Validation croisée pour évaluer la capacité de généralisation réelle
-    for fold, (train_idx, val_idx) in enumerate(skf.split(X_clean_audio, y_clean)):
-        x_aud_tr, y_tr = X_clean_audio.iloc[train_idx], y_clean[train_idx]
-        x_aud_val, y_val = X_clean_audio.iloc[val_idx], y_clean[val_idx]
-
-        # 1. Entraînement du modèle de base sur le signal audio uniquement
-        base_model = XGBClassifier(**xgb_params_audio)
-        base_model.fit(x_aud_tr, y_tr)
-
-        # Extraction des caractéristiques latentes (probabilités de sortie)
-        train_probas = base_model.predict_proba(x_aud_tr)
-        val_probas = base_model.predict_proba(x_aud_val)
-
-        # 2. Construction de la matrice pour le méta-modèle (Probabilités + Coordonnées)
-        X_meta_train = np.hstack([train_probas, X_geo.iloc[train_idx].values])
-        X_meta_val = np.hstack([val_probas, X_geo.iloc[val_idx].values])
-
-        # Entraînement du méta-modèle de fusion
-        meta_model = XGBClassifier(**xgb_params_meta)
-        meta_model.fit(X_meta_train, y_tr)
-
-        # Sauvegarde des prédictions strictes hors pli pour le calcul des métriques
-        oof_proba[val_idx] = meta_model.predict_proba(X_meta_val)
-        oof_preds[val_idx] = meta_model.predict(X_meta_val)
-
-        print(f"  > Pli {fold+1} | Meta-Accuracy : {accuracy_score(y_val, oof_preds[val_idx]):.4f}")
-
-
-    print("\n[*] Entraînement des modèles finaux pour l'inférence...")
-
-    # Le pipeline d'inférence nécessite le modèle audio complet et le méta-modèle complet
-    final_base_model = XGBClassifier(**xgb_params_audio).fit(X_clean_audio, y_clean)
-
-    final_probas = final_base_model.predict_proba(X_clean_audio)
-    X_meta_final = np.hstack([final_probas, X_geo.values])
-
-    final_meta_model = XGBClassifier(**xgb_params_meta).fit(X_meta_final, y_clean)
-
-    # Restitution des artefacts d'entraînement et de validation
-    return {"base": final_base_model, "meta": final_meta_model}, y_clean, oof_preds, oof_proba
+    val_prob = extract_positive_probas(meta_model.predict_proba(X_all_base[val_mask]))
+    return {'base_xgb': base_xgb, 'base_lgb': base_lgb, 'meta': meta_model, 'val_prob': val_prob, 'val_true': y_soundscape_multi[val_mask]}

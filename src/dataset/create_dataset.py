@@ -1,149 +1,113 @@
 import pandas as pd
 import argparse
 import os
-import time
+import ast
 
 
 
-def remove_spatial_outliers_by_species(df, multiplier=2.0):
-    """
-    Filtre les coordonnées géographiques aberrantes en utilisant la méthode de l'écart 
-    interquartile (IQR), calculé spécifiquement pour chaque espèce.
-    
-    Args:
-        df: DataFrame Pandas contenant les colonnes 'primary_label', 'latitude' et 'longitude'.
-        multiplier: Facteur multiplicatif pour l'IQR. Une valeur de 2.0 cible les valeurs 
-            extrêmement aberrantes afin de limiter les faux positifs lors de la suppression.
-
-    Returns:
-        Un tuple contenant :
-            - Le DataFrame nettoyé.
-            - Le nombre d'enregistrements supprimés lors de cette étape.
-    """
-    # Vérification de la présence des colonnes requises
-    if not all(col in df.columns for col in ['primary_label', 'latitude', 'longitude']):
-        return df, 0
-
-    initial_len = len(df)
-
-    for col in ['latitude', 'longitude']:
-        # Calcul du premier et troisième quartile (Q1, Q3) pour chaque espèce
-        Q1 = df.groupby('primary_label')[col].transform(lambda x: x.quantile(0.25))
-        Q3 = df.groupby('primary_label')[col].transform(lambda x: x.quantile(0.75))
-        IQR = Q3 - Q1
-
-        # Définition des seuils de tolérance pour l'identification des valeurs aberrantes
-        lower_bound = Q1 - multiplier * IQR
-        upper_bound = Q3 + multiplier * IQR
-
-        # Conservation des données comprises dans les seuils ou ayant des valeurs nulles
-        df = df[(df[col] >= lower_bound) & (df[col] <= upper_bound) | (df[col].isna())]
-
-    return df, initial_len - len(df)
+def clean_focal_data(df_focal, df_taxa):
+    print("\n[*] Nettoyage des données focales (train_metadata.csv)...")
+    initial_len = len(df_focal)
+    valid_birds = set(df_taxa['primary_label'].astype(str).unique())
 
 
-def remove_rare_classes(df, min_pct=0.01):
-    """
-    Supprime les classes (espèces) qui représentent moins d'un certain pourcentage 
-    (min_pct) de l'ensemble du dataset.
-    """
-    if 'primary_label' not in df.columns:
-        return df, 0
+    def parse_all_labels(row):
+        labels = [str(row['primary_label'])]
 
-    initial_len = len(df)
+        # Extraction sécurisée des secondary_labels (souvent type string "['bird1', 'bird2']")
+        sec_labels = row.get('secondary_labels', '[]')
+        if pd.notna(sec_labels) and sec_labels != '[]':
+            try:
+                parsed_sec = ast.literal_eval(sec_labels)
+                if isinstance(parsed_sec, list):
+                    labels.extend([str(b) for b in parsed_sec])
+            except (ValueError, SyntaxError):
+                pass # Si le format est corrompu, on ignore
 
-    # Calcule la fréquence de chaque classe
-    class_freq = df['primary_label'].value_counts(normalize=True)
+        # On ne garde que les oiseaux valides de la compétition et on déduplique
+        valid_labels = list(set([b for b in labels if b in valid_birds]))
+        return ';'.join(valid_labels) if valid_labels else "nocall"
 
-    # Isole les classes qui ont une fréquence >= 1%
-    valid_classes = class_freq[class_freq >= min_pct].index
+    # Création d'une cible unifiée multi-label identique aux soundscapes
+    df_focal['target_multi'] = df_focal.apply(parse_all_labels, axis=1)
 
-    # Filtre le dataframe
-    df = df[df['primary_label'].isin(valid_classes)]
-
-    return df, initial_len - len(df)
+    print(f"  -> Lignes conservées : {len(df_focal)} / {initial_len}")
+    return df_focal
 
 
-def filter_birdclef_csv(input_path, output_dir):
-    """
-    Orchestre le processus de nettoyage du jeu de données BirdCLEF. 
-    Charge les données, supprime les valeurs manquantes et aberrantes, 
-    puis sauvegarde le résultat tout en générant un rapport d'exécution.
-    
-    Args:
-        input_path: Chemin vers le fichier CSV source.
-        output_dir: Répertoire de destination pour le fichier nettoyé.
-    """
-    # Validation de l'existence du fichier d'entrée
-    if not os.path.exists(input_path):
-        print(f"Erreur : Le fichier d'entrée '{input_path}' n'existe pas.")
-        return
 
-    start_time = time.time()
-    print(f"Chargement et filtrage de {input_path}...")
+def clean_soundscape_data(df_snd, df_taxa):
+    print("\n[*] Nettoyage des Soundscapes (train_soundscapes_labels.csv)...")
+    initial_len = len(df_snd)
+    valid_birds = set(df_taxa['primary_label'].astype(str).unique())
 
-    df = pd.read_csv(input_path)
-    initial_len = len(df)
+    df_snd['primary_label'] = df_snd['primary_label'].fillna("nocall")
 
-    # Suppression des audios de mauvaise qualité (rating == 1.0)
-    audio_deleted = 0
-    if 'rating' in df.columns:
-        len_before = len(df)
-        df = df[df['rating'] != 1.0]
-        audio_deleted = len_before - len(df)
+    def filter_and_clean_labels(label_string):
+        if str(label_string) == "nocall": return "nocall"
+        birds = [b.strip() for b in str(label_string).split(';') if b.strip()]
+        kept_birds = [b for b in birds if b in valid_birds]
+        return ';'.join(kept_birds) if kept_birds else "nocall"
 
-    # Suppression des enregistrements ne possédant pas de coordonnées géographiques
-    nans_deleted = 0
-    if 'latitude' in df.columns and 'longitude' in df.columns:
-        len_before = len(df)
-        df = df.dropna(subset=['latitude', 'longitude'])
-        nans_deleted = len_before - len(df)
+    # On renomme 'primary_label' en 'target_multi' pour matcher le Focal dataset
+    df_snd['target_multi'] = df_snd['primary_label'].apply(filter_and_clean_labels)
 
-    # Application du filtre d'aberrations spatiales par espèce
-    df, outliers_deleted = remove_spatial_outliers_by_species(df, multiplier=3.0)
+    print(f"  -> Lignes conservées : {len(df_snd)} / {initial_len}")
+    return df_snd
 
-    min_pct = 0.0001
-    df, rare_classes_deleted = remove_rare_classes(df, min_pct=min_pct)
 
-    # Calcul des stats pour le rapport final
-    final_len = len(df)
-    total_deleted = initial_len - final_len
-    remaining_classes = df['primary_label'].nunique() if 'primary_label' in df.columns else "Inconnu"
-    exec_time = time.time() - start_time
 
-    # Création du répertoire de sortie s'il n'existe pas et sauvegarde du fichier
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, "train_cleaned.csv")
-    df.to_csv(output_path, index=False)
-
-    # Affichage du rapport de nettoyage
+def analyze_rare_classes(df_focal, df_snd):
     print("\n" + "="*50)
-    print("Rapport de nettoyage")
+    print("ALERTE CLASSES RARES (Basé sur Target Multi-Label)")
     print("="*50)
-    print(f"Lignes totales supprimées   : {total_deleted:,}".replace(',', ' '))
-    print(f"  ├─ Qualité audio (== 1)   : {audio_deleted:,}".replace(',', ' '))
-    print(f"  ├─ Coordonnées manquantes : {nans_deleted:,}".replace(',', ' '))
-    print(f"  ├─ Outliers géographiques : {outliers_deleted:,}".replace(',', ' '))
-    print(f"  └─ Classes < {min_pct} occurence : {rare_classes_deleted:,}".replace(',', ' '))
-    print("-" * 50)
-    print(f"Taille finale du dataset    : {final_len:,} lignes".replace(',', ' '))
-    print(f"Classes restantes           : {remaining_classes}")
-    print(f"Temps d'exécution           : {exec_time:.3f} s")
-    print(f"Fichier sauvegardé          : {output_path}")
-    print("="*50 + "\n")
+
+    all_birds = []
+
+    # On compte tous les oiseaux (primary + secondary) dans le focal
+    for labels in df_focal['target_multi']:
+        if labels != "nocall": all_birds.extend(labels.split(';'))
+
+    # Et dans les soundscapes
+    for labels in df_snd['target_multi']:
+        if labels != "nocall": all_birds.extend(labels.split(';'))
+
+    total_counts = pd.Series(all_birds).value_counts()
+
+    rare_birds = total_counts[total_counts <= 5]
+    very_rare_birds = total_counts[total_counts == 1]
+
+    print(f"[*] Espèces avec <= 5 occurrences totales : {len(rare_birds)}")
+    print(f"[*] Espèces avec EXACTEMENT 1 occurrence  : {len(very_rare_birds)}")
+
 
 
 def main():
-    """
-    Point d'entrée du script. 
-    Gère l'analyse des arguments de la ligne de commande et lance le processus de filtrage.
-    """
-    parser = argparse.ArgumentParser(description="Nettoyage du dataset BirdCLEF.")
-    parser.add_argument('-i', "--input", default="../../../data/birdclef-2026/train.csv")
-    parser.add_argument('-o', "--output", default="../../../output")
+    parser = argparse.ArgumentParser(description="Unification et Nettoyage des Datasets BirdCLEF")
+    parser.add_argument("--focal", type=str, default="../../../data/birdclef-2026/train.csv")
+    parser.add_argument("--soundscape", type=str, default="../../../data/birdclef-2026/train_soundscapes_labels.csv")
+    parser.add_argument("--taxonomy", type=str, default="../../../data/birdclef-2026/taxonomy.csv")
+    parser.add_argument("--out-dir", type=str, default="../../../output/")
     args = parser.parse_args()
 
-    filter_birdclef_csv(args.input, args.output)
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    df_focal = pd.read_csv(args.focal)
+    df_snd = pd.read_csv(args.soundscape)
+    df_taxa = pd.read_csv(args.taxonomy)
+
+    df_focal_clean = clean_focal_data(df_focal, df_taxa)
+    df_snd_clean = clean_soundscape_data(df_snd, df_taxa)
+
+    analyze_rare_classes(df_focal_clean, df_snd_clean)
+
+    out_focal = os.path.join(args.out_dir, "train_focal_cleaned.csv")
+    out_snd = os.path.join(args.out_dir, "train_soundscapes_cleaned.csv")
+    
+    df_focal_clean.to_csv(out_focal, index=False)
+    df_snd_clean.to_csv(out_snd, index=False)
+    
+    print(f"\n[+] Succès ! Datasets sauvegardés dans {args.out_dir}")
 
 
 if __name__ == "__main__":

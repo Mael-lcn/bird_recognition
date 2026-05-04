@@ -1,109 +1,93 @@
-import numpy as np
-import librosa
-from pathlib import Path
+import torch
+import torchaudio
 
 
 
-# Constantes de configuration pour le traitement du signal
 SAMPLE_RATE = 32000
-WINDOW_DURATION = 3
-STEP_DURATION = 2
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def extract_bag_of_windows(file_path):
-    """
-    Extrait un ensemble de fenêtres à partir d'un fichier audio, 
-    en calculant des caractéristiques spectrales robustes pour chaque fenêtre.
-    
-    Cette fonction utilise le Per-Channel Energy Normalization (PCEN) couplé 
-    aux coefficients MFCC pour extraire des signaux bioacoustiques optimaux.
-    
-    Args:
-        file_path: Le chemin d'accès au fichier audio à analyser.
+class TorchFeatureExtractor:
+    def __init__(self, sr=SAMPLE_RATE, device=DEVICE, aug_mode="none"):
+        self.sr = sr
+        self.device = device
+        self.aug_mode = aug_mode
+
+        # Outils de transformation de base
+        self.spec_transform = torchaudio.transforms.Spectrogram(
+            n_fft=2048, hop_length=512, power=2
+        ).to(self.device)
+
+        self.mfcc_transform = torchaudio.transforms.MFCC(
+            sample_rate=self.sr, n_mfcc=20,
+            melkwargs={"n_fft": 2048, "hop_length": 512, "n_mels": 128, "f_min": 50, "f_max": 15000}
+        ).to(self.device)
+
+        self.centroid_transform = torchaudio.transforms.SpectralCentroid(
+            sample_rate=self.sr, n_fft=2048, hop_length=512
+        ).to(self.device)
         
-    Returns:
-        Une liste de dictionnaires, où chaque dictionnaire représente une fenêtre 
-        de temps et contient ses caractéristiques acoustiques (MFCC, flatness, énergie).
-        Retourne None si l'audio est corrompu ou trop court.
-    """
-    try:
-        # Chargement des 30 premières secondes de l'audio à la fréquence d'échantillonnage cible
-        y, sr = librosa.load(file_path, sr=SAMPLE_RATE, duration=30)
+        # Génération des noms de colonnes
+        self.feat_names = []
+        q_names = ['q05', 'q25', 'median', 'q75', 'q95']
 
-        # Rejet des fichiers dont la durée est inférieure à la taille d'une fenêtre
-        if len(y) < SAMPLE_RATE * WINDOW_DURATION: 
-            return None
-
-        # 1. Calcul du spectrogramme de Mel avec des bornes de fréquences adaptées aux oiseaux
-        S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=64, fmin=1000, fmax=14000)
-
-        # 2. Application du filtre PCEN
-        S_pcen = librosa.pcen(S, sr=sr, gain=0.8, bias=10, power=0.25, time_constant=0.06)
-
-        # Conversion des durées (secondes) en nombre de trames (frames)
-        window_size = librosa.samples_to_frames(WINDOW_DURATION * SAMPLE_RATE)
-        hop_size = window_size // 2
-
-        bag = []
-
-        # Découpage du spectrogramme en fenêtres glissantes
-        for start in range(0, S_pcen.shape[1] - window_size, hop_size):
-            window = S_pcen[:, start:start+window_size]
-
-            # Extraction des caractéristiques de base
-            mfccs = librosa.feature.mfcc(S=window, n_mfcc=20)
-
-            feat = {
-                "window_start": start,
-                "flatness": np.float32(np.mean(librosa.feature.spectral_flatness(S=window))),
-                "heuristic_score": np.float32(np.max(window)) # L'énergie maximale sert de proxy pour la présence d'un chant
-            }
-
-            # Extraction des statistiques sur les coefficients MFCC
+        for feat_type in ['mfcc', 'delta', 'delta2']:
             for i in range(20):
-                feat[f"mfcc_mean_{i}"] = np.float32(np.mean(mfccs[i]))
-                feat[f"mfcc_max_{i}"] = np.float32(np.max(mfccs[i]))
-                feat[f"mfcc_std_{i}"] = np.float32(np.std(mfccs[i]))
+                for stat in q_names:
+                    self.feat_names.append(f"{feat_type}_{i}_{stat}")
 
-            bag.append(feat)
+        for feat_type in ['centroid', 'rms', 'flatness', 'band1_ratio', 'band2_ratio', 'band3_ratio', 'band4_ratio']:
+            for stat in q_names:
+                self.feat_names.append(f"{feat_type}_{stat}")
+                
+        self.feat_names.append('zcr_mean') # 336 Features au total
 
-        return bag
-        
-    except Exception as e:
-        print(f"Erreur avec {file_path}: {e}")
-        return None
+    def add_background_noise(self, y_tensor, noise_level):
+        return (y_tensor * 0.8) + (torch.randn_like(y_tensor) * noise_level)
 
+    def extract_features_batch(self, y_chunks_tensor):
+        with torch.no_grad():
+            y_chunks_tensor = y_chunks_tensor.to(self.device)
+            if self.aug_mode == "noise_light": y_chunks_tensor = self.add_background_noise(y_chunks_tensor, 0.01)
+            elif self.aug_mode == "noise_heavy": y_chunks_tensor = self.add_background_noise(y_chunks_tensor, 0.04)
 
-def worker_wrapper_mil(args):
-    """
-    Wrapper facilitant l'exécution parallèle du processus d'extraction.
-    Prend en charge un fichier audio, extrait ses fenêtres, et enrichit chaque 
-    fenêtre avec les métadonnées globales du fichier d'origine.
+            # Spectre de puissance de base
+            spec = self.spec_transform(y_chunks_tensor)
+
+            # Spectral Flatness (Séparation Bruit / Sifflement)
+            geom_mean = torch.exp(torch.mean(torch.log(spec + 1e-8), dim=1, keepdim=True))
+            arith_mean = torch.mean(spec, dim=1, keepdim=True) + 1e-8
+            flatness = geom_mean / arith_mean # (batch, 1, time)
+
+            # Bio-Bandes d'Énergie (Les 4 zones)
+            # Résolution de fréquence : 32000 / 2048 = 15.625 Hz par bin
+            total_energy = torch.sum(spec, dim=1, keepdim=True) + 1e-8
+            b1 = torch.sum(spec[:, 3:128, :], dim=1, keepdim=True) / total_energy   # ~50Hz - 2000Hz (Vent, Hiboux)
+            b2 = torch.sum(spec[:, 128:256, :], dim=1, keepdim=True) / total_energy # ~2000Hz - 4000Hz (Corbeaux)
+            b3 = torch.sum(spec[:, 256:512, :], dim=1, keepdim=True) / total_energy # ~4000Hz - 8000Hz (Passereaux)
+            b4 = torch.sum(spec[:, 512:960, :], dim=1, keepdim=True) / total_energy # ~8000Hz - 15000Hz (Insectes)
     
-    Args:
-        args: Un tuple contenant 3 éléments :
-            - L'index de la ligne (ignoré ici).
-            - Un dictionnaire ou objet Series Pandas contenant les métadonnées.
-            - Le chemin du répertoire racine contenant les fichiers audio.
-            
-    Returns:
-        Une liste de dictionnaires prêts à être intégrés dans un DataFrame global.
-        Retourne une liste vide si le fichier n'a pas pu être traité.
-    """
-    _, row, audio_dir = args
-    file_path = Path(audio_dir) / row['filename']
+            # RMS Temporel (Dynamique de l'attaque)
+            rms = torch.sqrt(torch.mean(spec, dim=1, keepdim=True)) # (batch, 1, time)
 
-    # Extraction des caractéristiques brutes
-    bag = extract_bag_of_windows(file_path)
+            # Spectral Centroid (Brillance)
+            centroid = self.centroid_transform(y_chunks_tensor)
+            if centroid.ndim == 2: centroid = centroid.unsqueeze(1)
 
-    if not bag:
-        return []
+            # MFCC et Dérivées (Timbre)
+            mfcc = self.mfcc_transform(y_chunks_tensor)
+            delta = torchaudio.functional.compute_deltas(mfcc)
+            delta2 = torchaudio.functional.compute_deltas(delta)
 
-    # Injection des métadonnées contextuelles (labels et géographie) dans chaque fenêtre
-    for window_feat in bag:
-        window_feat['file_id'] = row['filename']
-        window_feat['geo_latitude'] = np.float32(row['latitude'])
-        window_feat['geo_longitude'] = np.float32(row['longitude'])
-        window_feat['label'] = row['primary_label']
-        
-    return bag
+            # On assemble tout le long de l'axe des fréquences/features, en gardant la ligne temporelle intacte
+            temporal_feats = torch.cat([mfcc, delta, delta2, centroid, rms, flatness, b1, b2, b3, b4], dim=1)
+
+            # Calcul des quantiles robustes sur l'axe du temps
+            q = torch.tensor([0.05, 0.25, 0.5, 0.75, 0.95], dtype=torch.float32).to(self.device)
+            stats = torch.quantile(temporal_feats, q, dim=2) 
+            stats = stats.permute(1, 2, 0).reshape(temporal_feats.shape[0], -1) # Aplatissement: (batch, 67 * 5)
+
+            # Feature globale isolée
+            zcr = (y_chunks_tensor[:, 1:] * y_chunks_tensor[:, :-1] < 0).float().mean(dim=1, keepdim=True)
+
+            return torch.cat([stats, zcr], dim=1).cpu().numpy()
