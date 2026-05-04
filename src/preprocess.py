@@ -1,7 +1,7 @@
 import librosa
 import soundfile as sf
 from pathlib import Path
-import os 
+import os
 import matplotlib.pyplot as plt
 import glob
 import pandas as pd
@@ -9,6 +9,7 @@ import numpy as np
 from scipy.signal import get_window
 #from sklearn.preprocessing import LabelEncoder
 import json
+import ast
 
 dataset_path = Path('../dataset')
 train_path = os.path.join(dataset_path, 'train.csv')
@@ -95,10 +96,15 @@ def dct(dct_filter_num, filter_len):
     return basis
 
 #https://www.kaggle.com/code/ilyamich/mfcc-implementation-and-tutorial
-def stft_audio(sr, blocksize, overlap, file):
+def stft_audio(sr, blocksize, overlap, path, start_sec=None, end_sec=None):
 
-	path = os.path.join(data_train_path, file)
-	data, samplerate = sf.read(path)
+	if start_sec is not None and end_sec is not None:
+		info = sf.info(path)
+		start_frame = int(start_sec * info.samplerate)
+		stop_frame = int(end_sec * info.samplerate)
+		data, samplerate = sf.read(path, start=start_frame, stop=stop_frame)
+	else:
+		data, samplerate = sf.read(path)
 	original_duration = len(data) / samplerate
 
 	#pas utile mais dans le doute
@@ -126,11 +132,16 @@ def stft_audio(sr, blocksize, overlap, file):
 
 	data = np.array(frames)
 
+	cutoff_freq = 1000
 	data_fft = np.empty((data.shape[0], int(1 + blocksize // 2)), dtype=np.complex64)
 	for n in range(data.shape[0]):
 		data_fft[n, :] = np.fft.fft(data[n])[:data_fft.shape[1]]
 
-	data_power = np.square(np.abs(data_fft))
+	freqs = np.fft.rfftfreq(blocksize, d=1/samplerate)
+	mask = freqs >= cutoff_freq
+	data_fft_filtered = data_fft * mask
+
+	data_power = np.square(np.abs(data_fft_filtered))
 
 	min_freq = 0
 	max_freq = sr / 2
@@ -148,19 +159,22 @@ def stft_audio(sr, blocksize, overlap, file):
 	dct_filters = dct(dct_filter_num, mel_filter_num)
 	cepstral_coefficents = np.dot(dct_filters, audio_log)
 
+	second_derivative = np.mean(np.diff(cepstral_coefficents, 2), axis=1)
 	mean = np.mean(cepstral_coefficents, axis=1)
 	std = np.std(cepstral_coefficents, axis=1)
 
-	return mean, std, original_duration
+	return mean, std, second_derivative, original_duration
 
-def create_label_map(filename):
+def create_label_map(json_filename, taxonomy_filename):
 
-	map = {}
+	df = pd.read_csv(taxonomy_filename)
 	labels = np.unique(np.array(df['primary_label']))
+	map = {}
+
 	for i in range(len(labels)):
 		map[labels[i]] = i
 
-	with open(filename, 'w') as f:
+	with open(json_filename, 'w') as f:
 		json.dump(map, f)
 
 	#print(map.keys())
@@ -170,32 +184,50 @@ def get_map(filename):
 
 	pass
 
-
-def get_features(sample_rate, blocksize, overlap):
+def get_features(sample_rate, blocksize, overlap, label_map):
 
 	#On met les features dans un csv direct, les features pour le moment c'est la mfcc avec 20 valeurs (faudra que j'étudie les paramètres) les coordonnées latitude/longitude (super important)
 	#la collection et le rating, le coef et la collection je vais les passer 
 	files = df['filename']
 
-	map = create_label_map('map.json')
-	#le = LabelEncoder()
+	species_list = list(label_map.keys())
+	num_classes = len(label_map)
+
 	header = (
 		[f'mean_coeff{i}' for i in range(1, 21)] +
 		[f'std_coeff{i}' for i in range(1, 21)] +
-		['latitude', 'longitude', 'rating', 'duration', 'label']
+		[f'diff2_coeff{i}' for i in range(1, 21)] +
+		['latitude', 'longitude', 'rating', 'duration'] +
+		species_list
 	)
+
 	lines = []
+	
 
 	for file in files:
 		
+		path = os.path.join(data_train_path, file)
+		mean, std, second_derivative, duration = stft_audio(sample_rate, blocksize, overlap, path)
+		row = df.loc[df['filename'] == file].iloc[0]
+		label_vector = np.zeros(num_classes)
 
-		mean, std, duration = stft_audio(sample_rate, blocksize, overlap, file)
-		label = df.loc[df['filename'] == file, 'primary_label'].values[0]
-		latitude = df.loc[df['filename'] == file, 'latitude'].values[0]
-		longitude = df.loc[df['filename'] == file, 'longitude'].values[0]
-		rating = df.loc[df['filename'] == file, 'rating'].values[0]
-		
-		line = list(mean) + list(std) + [latitude, longitude, rating, duration, label]
+		p_label = row['primary_label']
+		if p_label in label_map:
+			label_vector[label_map[p_label]] = 1.0
+
+		s_labels_raw = row['secondary_labels']
+		if isinstance(s_labels_raw, str) and s_labels_raw != '[]':
+			try:
+				secondary_list = ast.literal_eval(s_labels_raw)
+				for s_bird in secondary_list:
+					s_bird_str = str(s_bird)
+					if s_bird_str in label_map:
+						label_vector[label_map[s_bird_str]] = 1.0
+			except:
+				pass
+
+		meta = [row['latitude'], row['longitude'], row['rating'], duration]
+		line = list(mean) + list(std) + list(second_derivative) + meta + list(label_vector)
 		lines.append(line)
 
 	csv_features = pd.DataFrame(lines, columns=header)
@@ -203,7 +235,65 @@ def get_features(sample_rate, blocksize, overlap):
 
 	return csv_features
 
-_ = get_features(32000, 16000, 8000)
+def time_to_seconds(time_str):
+    if time_str.startswith("'"):
+        time_str = time_str[1:]
+    
+    h, m, s = map(int, time_str.split(':'))
+    return h * 3600 + m * 60 + s
 
-#xgboost ptet
-#Late fusion donc 2 modèles
+def get_features_soundscape(labels_csv, sample_rate, blocksize, overlap, label_map):
+
+	df_labels = pd.read_csv(labels_csv)
+	data_soundscape_path = os.path.join(dataset_path, 'train_soundscapes')
+	species_list = list(label_map.keys())
+	num_classes = len(label_map)
+    
+	header = (
+		[f'mean_coeff{i}' for i in range(1, 21)] +
+		[f'std_coeff{i}' for i in range(1, 21)] +
+		[f'diff2_coeff{i}' for i in range(1, 21)] +
+		['latitude', 'longitude', 'rating', 'duration'] +
+		species_list
+	)
+
+	lines = []
+
+	for _, row in df_labels.iterrows():
+
+		s_sec = time_to_seconds(row['start'])
+		e_sec = time_to_seconds(row['end'])
+
+		path = os.path.join(data_soundscape_path, row['filename'])
+		mean, std, second_derivative, duration = stft_audio(
+			sample_rate, blocksize, overlap, path,
+			start_sec=s_sec, end_sec=e_sec
+		)
+
+		label_vector = np.zeros(num_classes)
+
+		if isinstance(row['primary_label'], str):
+
+			birds = row['primary_label'].split(';')
+			for bird in birds:
+				bird_code = bird.strip()
+				if bird_code in label_map:
+					label_vector[label_map[bird_code]] = 1.0
+
+		latitude = np.nan
+		longitude = np.nan
+		rating = np.nan
+
+		meta = [latitude, longitude, rating, duration]
+		line = list(mean) + list(std) + list(second_derivative) + meta + list(label_vector)
+		lines.append(line)
+
+	csv_features = pd.DataFrame(lines, columns=header)
+	csv_features.to_csv("features_soundscape_multilabel.csv", index=False)
+
+	return csv_features
+
+bird_map = create_label_map('map.json', '../dataset/taxonomy.csv')
+
+#_ = get_features(32000, 16000, 8000, map)
+_ = get_features_soundscape('../dataset/train_soundscapes_labels.csv', 32000, 16000, 8000, bird_map)
