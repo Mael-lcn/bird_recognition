@@ -7,7 +7,7 @@ import glob
 import pandas as pd
 import numpy as np
 from scipy.signal import get_window
-#from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
 import json
 import ast
 
@@ -118,8 +118,7 @@ def stft_audio(sr, blocksize, overlap, path, start_sec=None, end_sec=None):
 
 	target_len = sr * 5
 	if len(data) > target_len:
-		start = np.random.randint(0, len(data) - target_len)
-		data = data[start:start+target_len]
+		data = data[:target_len]
 	else:
 		data = np.pad(data, (0, max(0, target_len - len(data))))
 
@@ -180,20 +179,26 @@ def create_label_map(json_filename, taxonomy_filename):
 	#print(map.keys())
 	return map
 
-def get_map(filename):
+def split_dataframe(df):
 
-	pass
+	train_df, test_df = train_test_split(
+		df,
+		test_size=0.2,
+		random_state=42,
+		stratify=df['primary_label']
+	)
 
-def get_features(sample_rate, blocksize, overlap, label_map):
+	return train_df, test_df
 
-	#On met les features dans un csv direct, les features pour le moment c'est la mfcc avec 20 valeurs (faudra que j'étudie les paramètres) les coordonnées latitude/longitude (super important)
-	#la collection et le rating, le coef et la collection je vais les passer 
-	files = df['filename']
+def get_features(df_input, sample_rate, blocksize, overlap, label_map):
+
+	files = df_input['filename']
 
 	species_list = list(label_map.keys())
 	num_classes = len(label_map)
 
 	header = (
+		['filename'] + 
 		[f'mean_coeff{i}' for i in range(1, 21)] +
 		[f'std_coeff{i}' for i in range(1, 21)] +
 		[f'diff2_coeff{i}' for i in range(1, 21)] +
@@ -202,13 +207,13 @@ def get_features(sample_rate, blocksize, overlap, label_map):
 	)
 
 	lines = []
-	
 
 	for file in files:
 		
 		path = os.path.join(data_train_path, file)
 		mean, std, second_derivative, duration = stft_audio(sample_rate, blocksize, overlap, path)
-		row = df.loc[df['filename'] == file].iloc[0]
+		row = df_input.loc[df_input['filename'] == file].iloc[0]
+
 		label_vector = np.zeros(num_classes)
 
 		p_label = row['primary_label']
@@ -220,18 +225,16 @@ def get_features(sample_rate, blocksize, overlap, label_map):
 			try:
 				secondary_list = ast.literal_eval(s_labels_raw)
 				for s_bird in secondary_list:
-					s_bird_str = str(s_bird)
-					if s_bird_str in label_map:
-						label_vector[label_map[s_bird_str]] = 1.0
+					if s_bird in label_map:
+						label_vector[label_map[s_bird]] = 1.0
 			except:
 				pass
 
 		meta = [row['latitude'], row['longitude'], row['rating'], duration]
-		line = list(mean) + list(std) + list(second_derivative) + meta + list(label_vector)
+		line = [file] + list(mean) + list(std) + list(second_derivative) + meta + list(label_vector)
 		lines.append(line)
 
 	csv_features = pd.DataFrame(lines, columns=header)
-	csv_features.to_csv("features_audio.csv", index=False)
 
 	return csv_features
 
@@ -250,6 +253,7 @@ def get_features_soundscape(labels_csv, sample_rate, blocksize, overlap, label_m
 	num_classes = len(label_map)
     
 	header = (
+		['filename'] +
 		[f'mean_coeff{i}' for i in range(1, 21)] +
 		[f'std_coeff{i}' for i in range(1, 21)] +
 		[f'diff2_coeff{i}' for i in range(1, 21)] +
@@ -285,7 +289,7 @@ def get_features_soundscape(labels_csv, sample_rate, blocksize, overlap, label_m
 		rating = np.nan
 
 		meta = [latitude, longitude, rating, duration]
-		line = list(mean) + list(std) + list(second_derivative) + meta + list(label_vector)
+		line = [row['filename']] + list(mean) + list(std) + list(second_derivative) + meta + list(label_vector)
 		lines.append(line)
 
 	csv_features = pd.DataFrame(lines, columns=header)
@@ -295,5 +299,12 @@ def get_features_soundscape(labels_csv, sample_rate, blocksize, overlap, label_m
 
 bird_map = create_label_map('map.json', '../dataset/taxonomy.csv')
 
-#_ = get_features(32000, 16000, 8000, map)
-_ = get_features_soundscape('../dataset/train_soundscapes_labels.csv', 32000, 16000, 8000, bird_map)
+train_features = get_features(df, 32000, 16000, 8000, bird_map)
+train_features.to_csv("features_audio_train.csv", index=False)
+
+#soundscape_features = get_features_soundscape('../dataset/train_soundscapes_labels.csv', 32000, 16000, 8000, bird_map)
+#soundscape_features.to_csv("features_soundscape_multilabel.csv", index=False)
+
+
+
+
