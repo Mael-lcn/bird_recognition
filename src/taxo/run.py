@@ -6,7 +6,6 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import MultiLabelBinarizer
 
-# Importations locales
 from config import parse_arguments
 from dataset import FocalAudioDataset, build_soundscape_dataset
 from features import TorchFeatureExtractor
@@ -24,7 +23,6 @@ def main():
     df_focal_meta = pd.read_csv(args.focal_meta)
     df_snd_labels = pd.read_csv(args.soundscape_labels)
 
-    # 1. Union des labels
     all_birds = set()
     for labels in df_focal_meta['target_multi']:
         all_birds.update([l for l in str(labels).split(';') if l and l != 'nocall'])
@@ -32,20 +30,14 @@ def main():
         all_birds.update([l for l in str(labels).split(';') if l and l != 'nocall'])
     
     official_classes = sorted(list(all_birds))
-    print(f"[*] Total des espèces uniques : {len(official_classes)}")
+    print(f"[*] Total des espèces uniques identifiées : {len(official_classes)}")
 
     extractor = TorchFeatureExtractor()
 
     print("\n--- EXTRACTION DES FEATURES ---")
-
-    # A. Soundscapes
     df_snd_feat = build_soundscape_dataset(df_snd_labels, args.soundscape_audio)
 
-    # B. Focales
-    dataset = FocalAudioDataset(
-        df_focal_meta, args.focal_audio, 
-        args.window_sec, args.vad_threshold
-    )
+    dataset = FocalAudioDataset(df_focal_meta, args.focal_audio, args.window_sec, args.vad_threshold)
     loader = DataLoader(dataset, batch_size=64, num_workers=args.workers)
 
     focal_feats = []
@@ -61,41 +53,28 @@ def main():
 
     df_focal_win = pd.DataFrame(focal_feats)
 
-    # 4. Encodage
     mlb = MultiLabelBinarizer(classes=official_classes)
     mlb.fit([[c] for c in official_classes])
 
     print("\n--- ENTRAÎNEMENT DU PIPELINE ---")
     results = train_kaggle_pipeline(df_focal_win, df_snd_feat, mlb, args)
 
-    # 5. Métriques et Sauvegarde
     print_full_report(results['val_true'], results['val_prob'], "TEST")
-    
     optimal_thresholds = optimize_f1_thresholds(results['val_true'], results['val_prob'], mlb.classes_)
 
     generate_class_analysis(
-        results['val_true'], 
-        results['val_prob'], 
-        mlb, 
-        output_path=output_dir / "analyse_classes_opti.csv",
-        thresholds=optimal_thresholds
+        results['val_true'], results['val_prob'], mlb, 
+        output_path=output_dir / "analyse_classes_opti.csv", thresholds=optimal_thresholds
     )
 
     export_worst_errors(
-        y_true=results['val_true'], 
-        y_prob=results['val_prob'], 
-        filenames=results['val_filename'], 
-        end_secs=results['val_end_sec'], 
-        encoder=mlb, 
-        output_path=output_dir / "worst_predictions_report.csv",
-        thresholds=optimal_thresholds
+        y_true=results['val_true'], y_prob=results['val_prob'], 
+        filenames=results['val_filename'], end_secs=results['val_end_sec'], 
+        encoder=mlb, output_path=output_dir / "worst_predictions_report.csv",
+        thresholds=optimal_thresholds, top_k=100
     )
 
-    joblib.dump({
-        'model': results['model'], 
-        'thresholds': optimal_thresholds
-    }, output_dir / "model_dict.joblib")
-
+    joblib.dump({'model': results['model'], 'thresholds': optimal_thresholds}, output_dir / "model_dict.joblib")
     print(f"\n[*] Pipeline terminé. Modèle sauvegardé dans {output_dir}")
 
 if __name__ == "__main__":
