@@ -19,9 +19,7 @@ def parse_arguments():
 
     parser.add_argument('-o', "--output", type=str, default="../../../output/res")
 
-    parser.add_argument("--em-iter", type=int, default=3, help="Itérations Expectation-Maximization")
     parser.add_argument("--window-sec", type=int, default=5, help="Taille du chunk en secondes")
-    parser.add_argument("--stride-sec", type=int, default=5, help="Saut temporel (overlap)")
     parser.add_argument('-w', "--workers", type=int, default=max(1, multiprocessing.cpu_count()-1))
 
     return parser.parse_args()

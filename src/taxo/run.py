@@ -40,25 +40,25 @@ def main():
     print("\n--- EXTRACTION DES FEATURES ---")
 
     # A. Soundscapes
-    df_snd_feat = build_soundscape_dataset(df_snd_labels, args.soundscape_audio, feature_mode=args.feature_mode)
+    df_snd_feat = build_soundscape_dataset(df_snd_labels, args.soundscape_audio)
 
     # B. Focales
     dataset = FocalAudioDataset(
         df_focal_meta, args.focal_audio, 
-        args.window_sec, args.stride_sec, args.vad_threshold
+        args.window_sec, args.vad_threshold
     )
-    loader = DataLoader(dataset, batch_size=32, collate_fn=focal_collate_fn, num_workers=args.workers)
+    loader = DataLoader(dataset, batch_size=64, num_workers=args.workers)
 
     focal_feats = []
-    print("[*] Extraction Audio Focaux...")
-    for chunks, meta in tqdm(loader):
-        if chunks.numel() == 0: continue
-        feats = extractor.extract_features_batch(chunks) 
-        for i in range(len(meta)):
+    print("[*] Extraction Audio Focaux (First 5s)...")
+    for chunk, meta in tqdm(loader):
+        feats = extractor.extract_features_batch(chunk) 
+        for i in range(len(meta['file_id'])):
             feat_dict = {extractor.feat_names[j]: feats[i, j] for j in range(len(extractor.feat_names))}
-            feat_dict.update(meta[i])
+            for key in meta:
+                feat_dict[key] = meta[key][i]
             focal_feats.append(feat_dict)
-    
+
     df_focal_win = pd.DataFrame(focal_feats)
 
     # 4. Encodage
