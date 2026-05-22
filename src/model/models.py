@@ -15,10 +15,17 @@ def extract_positive_probas(predict_proba_output):
         else: res.append(np.zeros(p.shape[0], dtype=np.float32))
     return np.array(res).T
 
+
 def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, n_iter):
     xgb_device = "cuda" if torch.cuda.is_available() else "cpu"
-    audio_cols = [c for c in df_focal_windows.columns if any(k in c for k in ['mfcc', 'delta', 'centroid', 'zcr', 'bp_ratio'])]
     
+    if any(c.startswith('perch_') for c in df_focal_windows.columns):
+        audio_cols = [c for c in df_focal_windows.columns if c.startswith('perch_')]
+        print(f"[*] Mode Perch détecté. Dimension des features : {len(audio_cols)}")
+    else:
+        audio_cols = [c for c in df_focal_windows.columns if any(k in c for k in ['mfcc', 'delta', 'centroid', 'zcr', 'bp_ratio', 'rms', 'flatness'])]
+        print(f"[*] Mode Tabulaire détecté. Dimension des features : {len(audio_cols)}")
+
     xgb_params = {
         'objective': 'binary:logistic', 'tree_method': 'hist', 'device': xgb_device, 
         'random_state': 42, 'base_score': 0.5,

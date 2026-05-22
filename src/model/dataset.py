@@ -6,12 +6,12 @@ from pathlib import Path
 from tqdm import tqdm
 from torch.utils.data import Dataset
 from sklearn.preprocessing import MultiLabelBinarizer
-from features import TorchFeatureExtractor, SAMPLE_RATE
+from features import TorchFeatureExtractor, PerchFeatureExtractor, SAMPLE_RATE
 
 
 
 class FocalAudioDataset(Dataset):
-    def __init__(self, df_meta, audio_dir, window_sec=5, stride_sec=2, vad_threshold=0.0):
+    def __init__(self, df_meta, audio_dir, window_sec, stride_sec, vad_threshold):
         self.df_meta = df_meta.reset_index(drop=True)
         self.audio_dir = Path(audio_dir)
         self.window_sec = window_sec
@@ -74,15 +74,23 @@ def focal_collate_fn(batch):
         return torch.empty(0), []
     return torch.stack(all_chunks), all_meta
 
-def build_soundscape_dataset(df_labels, audio_dir):
-    print("[*] Extraction Audio Soundscapes (GPU)...")
+
+def build_soundscape_dataset(df_labels, audio_dir, feature_mode="tabular"):
+    print(f"[*] Extraction Audio Soundscapes (GPU) - Mode: {feature_mode}...")
+    all_feats = []
+
+    # Choix dynamique de l'extracteur
+    if feature_mode == "perch":
+        extractor = PerchFeatureExtractor(aug_mode="none")
+    else:
+        extractor = TorchFeatureExtractor(aug_mode="none")
     all_feats = []
     extractor = TorchFeatureExtractor(aug_mode="none")
-    
+
     for filename in tqdm(df_labels['filename'].unique()):
         path = Path(audio_dir) / filename
         if not path.exists(): continue
-        
+
         try:
             y_np, sr = sf.read(path)
             y = torch.tensor(y_np, dtype=torch.float32)
@@ -125,6 +133,7 @@ def build_soundscape_dataset(df_labels, audio_dir):
                 all_feats.append(feat_dict)
 
     return pd.DataFrame(all_feats)
+
 
 def prepare_for_mil(df_windows, official_classes=None):
     print("[*] Encodage Multi-Label...")

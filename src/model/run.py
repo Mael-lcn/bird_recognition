@@ -8,9 +8,9 @@ from torch.utils.data import DataLoader
 
 from config import parse_arguments
 from dataset import FocalAudioDataset, focal_collate_fn, build_soundscape_dataset, prepare_for_mil
-from features import TorchFeatureExtractor
+from features import TorchFeatureExtractor, PerchFeatureExtractor
 from models import train_kaggle_pipeline
-from metrics import print_full_report, generate_class_analysis, optimize_f1_thresholds
+from metrics import print_full_report, generate_class_analysis, optimize_f1_thresholds, export_worst_errors
 
 
 
@@ -40,11 +40,18 @@ def main():
         pin_memory=True if torch.cuda.is_available() else False
     )
 
-    extractor_clean = TorchFeatureExtractor(aug_mode="none")
-    extractor_light = TorchFeatureExtractor(aug_mode="noise_light")
-    extractor_heavy = TorchFeatureExtractor(aug_mode="noise_heavy")
+    if args.feature_mode == "perch":
+        ExtractorClass = PerchFeatureExtractor
+        MAX_GPU_CHUNKS = 64
+    else:
+        ExtractorClass = TorchFeatureExtractor
+        MAX_GPU_CHUNKS = 128
 
-    csv_temp_path = output_dir / "focal_features_temp.csv"
+    extractor_clean = ExtractorClass(aug_mode="none")
+    extractor_light = ExtractorClass(aug_mode="noise_light")
+    extractor_heavy = ExtractorClass(aug_mode="noise_heavy")
+
+    csv_temp_path = output_dir / f"focal_features_temp_{args.feature_mode}.csv"
     if csv_temp_path.exists(): csv_temp_path.unlink()
 
     first_batch = True
@@ -52,8 +59,8 @@ def main():
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
 
     def extract_safe_microbatch(extractor, chunks):
-        MAX_GPU_CHUNKS = 128
         lst = []
+        # On utilise MAX_GPU_CHUNKS dynamique
         for i in range(0, chunks.shape[0], MAX_GPU_CHUNKS):
             with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
                 lst.append(extractor.extract_features_batch(chunks[i:i+MAX_GPU_CHUNKS]))
@@ -96,17 +103,17 @@ def main():
         first_batch = False
 
     print(f"[+] Extraction terminée ! {total_chunks} chunks conditionnels générés.")
-    
+
     df_focal_win = pd.read_csv(csv_temp_path, low_memory=False)
     for col in df_focal_win.columns:
         if col not in ['file_id', 'target_multi', 'end_sec', 'rating']:
             df_focal_win[col] = pd.to_numeric(df_focal_win[col], errors='coerce')
     df_focal_win = df_focal_win.dropna().reset_index(drop=True)
-    
+
     df_focal_win, _, mlb = prepare_for_mil(df_focal_win, official_classes=official_classes)
 
     print("\n--- PRÉPARATION DONNÉES SOUNDSCAPES ---")
-    df_snd_feat = build_soundscape_dataset(df_snd_labels, args.soundscape_audio)
+    df_snd_feat = build_soundscape_dataset(df_snd_labels, args.soundscape_audio, feature_mode=args.feature_mode)
 
     print("\n--- ENTRAÎNEMENT DU PIPELINE ---")
     results = train_kaggle_pipeline(df_focal_win, df_snd_feat, mlb, args.em_iter)
@@ -124,6 +131,18 @@ def main():
         mlb, 
         output_path=output_dir / "analyse_classes_opti.csv",
         thresholds=optimal_thresholds
+    )
+
+    # Génération du rapport des pires erreurs
+    export_worst_errors(
+        y_true=results['val_true'], 
+        y_prob=results['val_prob'], 
+        filenames=results['val_filename'], 
+        end_secs=results['val_end_sec'], 
+        encoder=mlb, 
+        output_path=output_dir / "worst_predictions_report.csv",
+        thresholds=optimal_thresholds,
+        top_k=100
     )
 
     joblib.dump({

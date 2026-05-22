@@ -7,6 +7,9 @@ def parse_arguments():
     """Parser pour les arguments de ligne de commande."""
     parser = argparse.ArgumentParser(description="BirdCLEF 2026 : SOTA Tabulaire (MIL Disentangled)")
 
+    parser.add_argument("--feature-mode", type=str, choices=["tabular", "perch"], default="tabular", 
+                        help="Choix de l'extracteur : 'tabular' (MFCC, etc.) ou 'perch' (Embeddings 1536d)")
+
     parser.add_argument("--focal-meta", type=str, default="../../../output/train_focal_cleaned.csv")
     parser.add_argument("--focal-audio", type=str, default="../../../data/birdclef-2026/train_audio/")
 
@@ -17,7 +20,7 @@ def parse_arguments():
 
     parser.add_argument("--em-iter", type=int, default=3, help="Itérations Expectation-Maximization")
     parser.add_argument("--window-sec", type=int, default=5, help="Taille du chunk en secondes")
-    parser.add_argument("--stride-sec", type=int, default=3, help="Saut temporel (overlap)")
+    parser.add_argument("--stride-sec", type=int, default=5, help="Saut temporel (overlap)")
     parser.add_argument('-w', "--workers", type=int, default=max(1, multiprocessing.cpu_count()-1))
-    
+
     return parser.parse_args()
