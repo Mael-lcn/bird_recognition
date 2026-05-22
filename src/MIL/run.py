@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from pathlib import Path
 from tqdm import tqdm
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from config import parse_arguments
 from dataset import FocalAudioDataset, focal_collate_fn, build_soundscape_dataset, prepare_for_mil
@@ -33,6 +33,30 @@ def main():
     official_classes = sorted(list(all_birds))
     print(f"[*] Total des espèces uniques identifiées (Focal + Soundscapes) : {len(official_classes)}")
 
+    csv_temp_path = output_dir / f"focal_features_temp_{args.feature_mode}.csv"
+    processed_ids = set()
+    first_batch = True
+    total_chunks = 0
+
+    is_resume = args.resume
+
+    if is_resume and csv_temp_path.exists():
+        print(f"[*] Option --resume activée. Lecture de {csv_temp_path}...")
+        try:
+            # On lit uniquement la colonne file_id pour ne pas surcharger la RAM
+            df_existing = pd.read_csv(csv_temp_path, usecols=['file_id'])
+            processed_ids = set(df_existing['file_id'].dropna().astype(int).unique())
+            first_batch = False  # Le fichier a déjà ses en-têtes
+            total_chunks = len(df_existing)
+            print(f"[*] {len(processed_ids)} fichiers audio déjà traités ignorés ({total_chunks} extraits récupérés).")
+        except Exception as e:
+            print(f"[!] Erreur de lecture du CSV existant : {e}. On recommence de zéro.")
+            csv_temp_path.unlink()
+    else:
+        # Si on ne resume pas, on supprime l'ancien CSV s'il existe
+        if csv_temp_path.exists(): 
+            csv_temp_path.unlink()
+
     dataset = FocalAudioDataset(
         df_focal_meta, 
         args.focal_audio, 
@@ -40,8 +64,16 @@ def main():
         args.stride_sec, 
         args.vad_threshold
     )
+
+    # Si on a des IDs traités, on utilise un Subset PyTorch pour les sauter proprement
+    if processed_ids:
+        indices_to_process = [i for i in range(len(dataset)) if i not in processed_ids]
+        working_dataset = Subset(dataset, indices_to_process)
+    else:
+        working_dataset = dataset
+
     dataloader = DataLoader(
-        dataset, batch_size=16, shuffle=False, 
+        working_dataset, batch_size=16, shuffle=False, 
         num_workers=args.workers, collate_fn=focal_collate_fn,
         pin_memory=True if torch.cuda.is_available() else False
     )
@@ -57,11 +89,6 @@ def main():
     extractor_light = ExtractorClass(aug_mode="noise_light")
     extractor_heavy = ExtractorClass(aug_mode="noise_heavy")
 
-    csv_temp_path = output_dir / f"focal_features_temp_{args.feature_mode}.csv"
-    if csv_temp_path.exists(): csv_temp_path.unlink()
-
-    first_batch = True
-    total_chunks = 0
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
 
     def extract_safe_microbatch(extractor, chunks):
@@ -110,9 +137,12 @@ def main():
 
     print(f"[+] Extraction terminée ! {total_chunks} chunks conditionnels générés.")
 
-    extractor_clean.release_gpu()
-    extractor_light.release_gpu()
-    extractor_heavy.release_gpu()
+    if hasattr(extractor_clean, 'release_gpu'):
+        extractor_clean.release_gpu()
+        extractor_light.release_gpu()
+        extractor_heavy.release_gpu()
+    else:
+        torch.cuda.empty_cache()
 
     df_focal_win = pd.read_csv(csv_temp_path, low_memory=False)
     for col in df_focal_win.columns:
@@ -129,7 +159,7 @@ def main():
     results = train_kaggle_pipeline(df_focal_win, df_snd_feat, mlb, args.em_iter)
 
     # Calcul du ROC-AUC global
-    print_full_report(results['val_true'], results['val_prob'], mlb)
+    print_full_report(results['val_true'], results['val_prob'], mlb, phase_name="VALIDATION")
     
     # Recherche immédiate des seuils optimaux
     optimal_thresholds = optimize_f1_thresholds(results['val_true'], results['val_prob'], mlb.classes_)

@@ -6,8 +6,6 @@ from cuml.svm import SVC
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import StandardScaler
 
-
-
 class HierarchicalSVM:
     def __init__(self, config):
         self.config = config
@@ -18,14 +16,10 @@ class HierarchicalSVM:
         self.scaler = StandardScaler()
 
     def fit(self, X, Y_train):
-        # On force les colonnes en string au cas où
         self.species_cols = [str(c) for c in Y_train.columns.tolist()]
         
-        # ALERTE DE SÉCURITÉ TAXONOMIE (Maintenant ça va trouver les 234 !)
         matched_leaves = [s for s in self._get_leaves(self.taxonomy) if s in self.species_cols]
         print(f"[*] Vérification Taxonomie : {len(set(matched_leaves))}/{len(self.species_cols)} espèces trouvées dans l'arbre json.")
-        if len(matched_leaves) == 0:
-            print("[!!!] ERREUR CRITIQUE : Aucune espèce du CSV ne correspond au JSON. L'AUC sera de 0.5. Vérifiez les IDs.")
 
         # Normalisation obligatoire pour SVM
         X_scaled = self.scaler.fit_transform(X.values.astype(np.float32))
@@ -33,20 +27,34 @@ class HierarchicalSVM:
         def train_node(node_name, node_dict):
             Y_node = pd.DataFrame(index=Y_train.index)
             valid_keys = []
+            
             for k, v in node_dict.items():
-                # On EXPLODE proprement les feuilles du noeud !
                 species = self._get_leaves(v)
                 target = [s for s in species if s in self.species_cols]
                 if target:
-                    Y_node[k] = Y_train[target].max(axis=1)
-                    valid_keys.append(k)
-            
+                    # Somme logique (max) pour savoir si le groupe est présent
+                    node_target = Y_train[target].max(axis=1)
+
+                    # positifs et 5 négatifs pour la cross-validation interne de calibration Plat.
+                    n_pos = node_target.sum()
+                    n_neg = len(node_target) - n_pos
+                    
+                    if n_pos >= 5 and n_neg >= 5:
+                        Y_node[k] = node_target
+                        valid_keys.append(k)
+                    else:
+                        print(f"    [!] Nœud '{node_name}' -> Sous-groupe '{k}' ignoré pour l'entraînement (Pas assez d'exemples : Pos={int(n_pos)}, Neg={int(n_neg)})")
+
+            # On n'entraîne un classifieur multi-classe que s'il reste au moins 2 sous-groupes valides à discriminer
             if Y_node.shape[1] > 1:
                 clf = MultiOutputClassifier(SVC(probability=True))
                 clf.fit(X_scaled, Y_node.values.astype(np.float32)) 
                 self.models[node_name] = {'clf': clf, 'keys': valid_keys}
-            
-            for k in valid_keys:
+            else:
+                print(f"    [i] Nœud '{node_name}' : Étape d'entraînement sautée (Moins de 2 sous-groupes viables récurrents).")
+
+            # On continue de descendre de manière récursive dans l'arbre pour les sous-dictionnaires
+            for k in node_dict.keys():
                 if isinstance(node_dict[k], dict): 
                     train_node(k, node_dict[k])
                 
@@ -82,11 +90,11 @@ class HierarchicalSVM:
                     if isinstance(c_val, dict): 
                         predict_node(k, c_val, current_X, new_log_probs, indices)
                     else:
-                        # On explode aussi à la prédiction pour être sûr !
                         flat_leaves = self._get_leaves(c_val)
                         for c in [s for s in flat_leaves if s in self.species_cols]:
                             final_log_probs[indices, self.species_cols.index(c)] = new_log_probs
             else:
+                # Si le nœud n'a pas été entraîné faute de données, les probabilités parentes coulent vers les enfants
                 for k, v in node_dict.items():
                     if isinstance(v, dict): 
                         predict_node(k, v, current_X, current_log_probs, indices)
@@ -104,7 +112,6 @@ def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, args):
 
     X_train = df_focal_windows[audio_cols]
     
-    # On gère le split de la colonne multi-label générée par create_dataset.py
     y_raw = encoder.transform([[lbl for lbl in str(x).split(';') if lbl] for x in df_focal_windows['target_multi']])
     Y_train = pd.DataFrame(y_raw, columns=encoder.classes_)
 

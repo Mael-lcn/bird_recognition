@@ -9,6 +9,7 @@ def parse_arguments():
 
     parser.add_argument("--feature-mode", type=str, choices=["tabular", "perch"], default="tabular", 
                         help="Choix de l'extracteur : 'tabular' (MFCC, etc.) ou 'perch' (Embeddings 1536d)")
+    parser.add_argument("--resume", action="store_true", help="Reprendre l'extraction si un fichier CSV existe déjà")
 
     parser.add_argument("--focal-meta", type=str, default="../../../output/train_focal_cleaned.csv")
     parser.add_argument("--focal-audio", type=str, default="../../../data/birdclef-2026/train_audio/")

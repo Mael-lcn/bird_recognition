@@ -18,8 +18,8 @@ def extract_positive_probas(predict_proba_output):
 
 def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, n_iter):
     xgb_device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # Force la libération totale si le GPU est encore utilisé
-    import torch
     torch.cuda.empty_cache()
 
     if any(c.startswith('perch_') for c in df_focal_windows.columns):

@@ -131,7 +131,7 @@ class PerchFeatureExtractor:
         return outputs.embeddings[:, 0, :]
 
     def release_gpu(self):
-        print("[*] Libération élégante de la mémoire GPU (TensorFlow/Torch)...")
+        print("[*] Libération de la mémoire GPU (TensorFlow/Torch)...")
         # 1. Supprime le modèle de la mémoire
         del self.model
         # 2. Force le nettoyage de Python
