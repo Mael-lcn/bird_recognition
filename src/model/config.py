@@ -15,6 +15,7 @@ def parse_arguments():
 
     parser.add_argument("--soundscape-labels", type=str, default="../../../output/train_soundscapes_cleaned.csv")
     parser.add_argument("--soundscape-audio", type=str, default="../../../data/birdclef-2026/train_soundscapes/")
+    parser.add_argument("--vad-threshold", type=float, default=0.005, help="Seuil RMS pour ignorer le silence (VAD)")
 
     parser.add_argument('-o', "--output", type=str, default="../../../output/res")
 

@@ -33,7 +33,13 @@ def main():
     official_classes = sorted(list(all_birds))
     print(f"[*] Total des espèces uniques identifiées (Focal + Soundscapes) : {len(official_classes)}")
 
-    dataset = FocalAudioDataset(df_focal_meta, args.focal_audio, args.window_sec, args.stride_sec)
+    dataset = FocalAudioDataset(
+        df_focal_meta, 
+        args.focal_audio, 
+        args.window_sec, 
+        args.stride_sec, 
+        args.vad_threshold
+    )
     dataloader = DataLoader(
         dataset, batch_size=16, shuffle=False, 
         num_workers=args.workers, collate_fn=focal_collate_fn,
