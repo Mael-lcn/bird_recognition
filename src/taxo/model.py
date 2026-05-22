@@ -18,11 +18,12 @@ class HierarchicalSVM:
         self.scaler = StandardScaler()
 
     def fit(self, X, Y_train):
-        self.species_cols = Y_train.columns.tolist()
+        # On force les colonnes en string au cas où
+        self.species_cols = [str(c) for c in Y_train.columns.tolist()]
         
-        # ALERTE DE SÉCURITÉ TAXONOMIE
+        # ALERTE DE SÉCURITÉ TAXONOMIE (Maintenant ça va trouver les 234 !)
         matched_leaves = [s for s in self._get_leaves(self.taxonomy) if s in self.species_cols]
-        print(f"[*] Vérification Taxonomie : {len(matched_leaves)}/{len(self.species_cols)} espèces trouvées dans l'arbre json.")
+        print(f"[*] Vérification Taxonomie : {len(set(matched_leaves))}/{len(self.species_cols)} espèces trouvées dans l'arbre json.")
         if len(matched_leaves) == 0:
             print("[!!!] ERREUR CRITIQUE : Aucune espèce du CSV ne correspond au JSON. L'AUC sera de 0.5. Vérifiez les IDs.")
 
@@ -33,6 +34,7 @@ class HierarchicalSVM:
             Y_node = pd.DataFrame(index=Y_train.index)
             valid_keys = []
             for k, v in node_dict.items():
+                # On EXPLODE proprement les feuilles du noeud !
                 species = self._get_leaves(v)
                 target = [s for s in species if s in self.species_cols]
                 if target:
@@ -41,19 +43,32 @@ class HierarchicalSVM:
             
             if Y_node.shape[1] > 1:
                 clf = MultiOutputClassifier(SVC(probability=True))
-                clf.fit(X_scaled, Y_node.values.astype(np.float32)) # Utilise X_scaled !
+                clf.fit(X_scaled, Y_node.values.astype(np.float32)) 
                 self.models[node_name] = {'clf': clf, 'keys': valid_keys}
             
             for k in valid_keys:
-                if isinstance(node_dict[k], dict): train_node(k, node_dict[k])
+                if isinstance(node_dict[k], dict): 
+                    train_node(k, node_dict[k])
                 
         train_node('root', self.taxonomy)
 
     def _get_leaves(self, node):
-        return [node] if isinstance(node, list) else [s for v in node.values() for s in self._get_leaves(v)]
+        """Fonction récursive robuste pour EXPLODE n'importe quelle structure JSON (dict, liste, string)"""
+        if isinstance(node, dict):
+            leaves = []
+            for v in node.values():
+                leaves.extend(self._get_leaves(v))
+            return leaves
+        elif isinstance(node, list):
+            leaves = []
+            for item in node:
+                leaves.extend(self._get_leaves(item))
+            return leaves
+        else:
+            return [str(node)]
 
     def predict_proba(self, X):
-        X_scaled = self.scaler.transform(X.values.astype(np.float32)) # Normalise la validation
+        X_scaled = self.scaler.transform(X.values.astype(np.float32)) 
         final_log_probs = np.full((X_scaled.shape[0], len(self.species_cols)), -np.inf)
         
         def predict_node(node_name, node_dict, current_X, current_log_probs, indices):
@@ -64,15 +79,20 @@ class HierarchicalSVM:
                 for i, k in enumerate(clf_data['keys']):
                     c_val = node_dict[k]
                     new_log_probs = current_log_probs + preds_log[:, i]
-                    if isinstance(c_val, dict): predict_node(k, c_val, current_X, new_log_probs, indices)
+                    if isinstance(c_val, dict): 
+                        predict_node(k, c_val, current_X, new_log_probs, indices)
                     else:
-                        for c in [s for s in c_val if s in self.species_cols]:
+                        # On explode aussi à la prédiction pour être sûr !
+                        flat_leaves = self._get_leaves(c_val)
+                        for c in [s for s in flat_leaves if s in self.species_cols]:
                             final_log_probs[indices, self.species_cols.index(c)] = new_log_probs
             else:
                 for k, v in node_dict.items():
-                    if isinstance(v, dict): predict_node(k, v, current_X, current_log_probs, indices)
+                    if isinstance(v, dict): 
+                        predict_node(k, v, current_X, current_log_probs, indices)
                     else:
-                        for c in [s for s in v if s in self.species_cols]:
+                        flat_leaves = self._get_leaves(v)
+                        for c in [s for s in flat_leaves if s in self.species_cols]:
                             final_log_probs[indices, self.species_cols.index(c)] = current_log_probs
                             
         predict_node('root', self.taxonomy, X_scaled, np.zeros(X_scaled.shape[0]), np.arange(X_scaled.shape[0]))
@@ -83,6 +103,8 @@ def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, args):
     print(f"[*] Entraînement Hierarchical SVM avec {len(audio_cols)} features...")
 
     X_train = df_focal_windows[audio_cols]
+    
+    # On gère le split de la colonne multi-label générée par create_dataset.py
     y_raw = encoder.transform([[lbl for lbl in str(x).split(';') if lbl] for x in df_focal_windows['target_multi']])
     Y_train = pd.DataFrame(y_raw, columns=encoder.classes_)
 
