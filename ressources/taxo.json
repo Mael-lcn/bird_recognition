@@ -1,0 +1,644 @@
+{
+  "Amphibia": {
+    "Bufonidae": [
+      "67107"
+    ],
+    "Dendrobatidae": [
+      "64898"
+    ],
+    "Hylidae": {
+      "Boana": [
+        "555123",
+        "555145",
+        "555146"
+      ],
+      "Dendropsophus": [
+        "65377",
+        "65380"
+      ],
+      "Lysapsus": [
+        "1595929"
+      ],
+      "Pseudis": [
+        "66971"
+      ],
+      "Scinax": [
+        "24279",
+        "24285",
+        "24287",
+        "24321"
+      ],
+      "Trachycephalus": [
+        "67252"
+      ]
+    },
+    "Leptodactylidae": {
+      "Adenomera": [
+        "1491113"
+      ],
+      "Leptodactylus": [
+        "1176823",
+        "22930",
+        "22956",
+        "22961",
+        "22967",
+        "22973",
+        "22983",
+        "22985",
+        "70711"
+      ],
+      "Physalaemus": [
+        "23150",
+        "23154",
+        "23158",
+        "326272",
+        "476521"
+      ],
+      "Pseudopaludicola": [
+        "23176"
+      ]
+    },
+    "Microhylidae": {
+      "Chiasmocleis": [
+        "25073"
+      ],
+      "Dermatonotus": [
+        "25214"
+      ],
+      "Elachistocleis": [
+        "25092"
+      ]
+    },
+    "Phyllomedusidae": {
+      "Phyllomedusa": [
+        "23724"
+      ],
+      "Pithecopus": [
+        "517063"
+      ]
+    }
+  },
+  "Aves": {
+    "Accipitriformes": {
+      "Accipitridae": {
+        "Accipiter": [
+          "shshaw"
+        ],
+        "Busarellus": [
+          "blchaw1"
+        ],
+        "Rupornis": [
+          "roahaw"
+        ],
+        "Spizaetus": [
+          "blheag1"
+        ]
+      },
+      "Pandionidae": [
+        "osprey"
+      ]
+    },
+    "Anseriformes": {
+      "Anatidae": [
+        "bbwduc",
+        "wfwduc1"
+      ],
+      "Anhimidae": {
+        "Anhima": [
+          "horscr1"
+        ],
+        "Chauna": [
+          "souscr1"
+        ]
+      }
+    },
+    "Apodiformes": {
+      "Chionomesa": [
+        "glteme1"
+      ],
+      "Eupetomena": [
+        "swthum1"
+      ],
+      "Hylocharis": [
+        "gilhum1"
+      ],
+      "Phaethornis": [
+        "scther1"
+      ]
+    },
+    "Caprimulgiformes": {
+      "Antiurus": [
+        "sptnig1"
+      ],
+      "Antrostomus": [
+        "rufnig1"
+      ],
+      "Chordeiles": [
+        "nacnig1"
+      ],
+      "Lurocalis": [
+        "shtnig1"
+      ],
+      "Nyctidromus": [
+        "compau"
+      ],
+      "Setopagis": [
+        "litnig1"
+      ]
+    },
+    "Cariamiformes": [
+      "relser1"
+    ],
+    "Charadriiformes": {
+      "Charadriidae": [
+        "soulap1"
+      ],
+      "Jacanidae": [
+        "watjac1"
+      ],
+      "Scolopacidae": [
+        "greyel"
+      ]
+    },
+    "Columbiformes": {
+      "Columbina": [
+        "scadov1"
+      ],
+      "Leptotila": [
+        "grfdov1",
+        "whtdov"
+      ],
+      "Patagioenas": [
+        "picpig2"
+      ]
+    },
+    "Coraciiformes": {
+      "Alcedinidae": [
+        "rinkin1"
+      ],
+      "Momotidae": [
+        "bucmot4"
+      ]
+    },
+    "Cuculiformes": {
+      "Coccycua": [
+        "litcuc2"
+      ],
+      "Crotophaga": [
+        "greani1",
+        "smbani"
+      ],
+      "Dromococcyx": [
+        "phecuc1"
+      ],
+      "Piaya": [
+        "squcuc1"
+      ],
+      "Tapera": [
+        "strcuc1"
+      ]
+    },
+    "Falconiformes": {
+      "Caracara": [
+        "y00678"
+      ],
+      "Daptrius": [
+        "yehcar1"
+      ],
+      "Micrastur": [
+        "baffal1",
+        "coffal1"
+      ]
+    },
+    "Galbuliformes": [
+      "rutjac1"
+    ],
+    "Galliformes": {
+      "Cracidae": {
+        "Crax": [
+          "bafcur1"
+        ],
+        "Ortalis": [
+          "chacha1"
+        ]
+      },
+      "Phasianidae": [
+        "redjun"
+      ]
+    },
+    "Gruiformes": {
+      "Aramidae": [
+        "limpki"
+      ],
+      "Rallidae": {
+        "Aramides": [
+          "giwrai1",
+          "gycwor1"
+        ],
+        "Mustelirallus": [
+          "astcra1"
+        ],
+        "Rufirallus": [
+          "ocecra1"
+        ]
+      }
+    },
+    "Nyctibiiformes": [
+      "compot1",
+      "grepot1"
+    ],
+    "Passeriformes": {
+      "Conopophagidae": [
+        "rufgna3"
+      ],
+      "Corvidae": [
+        "plcjay1",
+        "purjay1",
+        "whnjay1"
+      ],
+      "Cotingidae": [
+        "batbel1"
+      ],
+      "Donacobiidae": [
+        "bkcdon"
+      ],
+      "Furnariidae": {
+        "Campylorhamphus": [
+          "rebscy1"
+        ],
+        "Dendroplex": [
+          "stbwoo2"
+        ],
+        "Furnarius": [
+          "palhor3",
+          "rufhor2"
+        ],
+        "Phacellodomus": [
+          "gretho2",
+          "ruftho1"
+        ],
+        "Pseudoseisura": [
+          "rufcac2"
+        ],
+        "Sittasomus": [
+          "oliwoo1"
+        ],
+        "Synallaxis": [
+          "cibspi1",
+          "pabspi1",
+          "sofspi1",
+          "spispi1",
+          "whlspi1"
+        ]
+      },
+      "Hirundinidae": [
+        "brcmar1"
+      ],
+      "Icteridae": {
+        "Cacicus": [
+          "sobcac1"
+        ],
+        "Gnorimopsar": [
+          "chobla1"
+        ],
+        "Icterus": [
+          "epaori4",
+          "orbtro3"
+        ]
+      },
+      "Mimidae": [
+        "chbmoc1"
+      ],
+      "Parulidae": [
+        "flawar1",
+        "rivwar1",
+        "whbwar2"
+      ],
+      "Passerellidae": [
+        "sabspa1"
+      ],
+      "Passeridae": [
+        "houspa"
+      ],
+      "Pipridae": {
+        "Chiroxiphia": [
+          "swtman1"
+        ],
+        "Machaeropterus": [
+          "ficman1"
+        ]
+      },
+      "Polioptilidae": [
+        "masgna1"
+      ],
+      "Thamnophilidae": {
+        "Biatas": [
+          "whbant2"
+        ],
+        "Cercomacra": [
+          "magant1"
+        ],
+        "Hypoedaleus": [
+          "spbant3"
+        ],
+        "Pyriglena": [
+          "wesfie1"
+        ],
+        "Taraba": [
+          "greant1"
+        ],
+        "Thamnophilus": [
+          "barant1",
+          "plasla1",
+          "varant1"
+        ]
+      },
+      "Thraupidae": {
+        "Cissopis": [
+          "magtan2"
+        ],
+        "Coereba": [
+          "banana"
+        ],
+        "Conirostrum": [
+          "chvcon1"
+        ],
+        "Coryphospingus": [
+          "recfin1"
+        ],
+        "Emberizoides": [
+          "lesgrf1"
+        ],
+        "Eucometis": [
+          "grhtan1"
+        ],
+        "Microspingus": [
+          "bcwfin2"
+        ],
+        "Paroaria": [
+          "yebcar"
+        ],
+        "Ramphocelus": [
+          "sibtan2"
+        ],
+        "Saltator": [
+          "grasal3"
+        ],
+        "Sicalis": [
+          "saffin"
+        ],
+        "Thraupis": [
+          "paltan1",
+          "saytan1"
+        ]
+      },
+      "Tityridae": {
+        "Pachyramphus": [
+          "crebec1"
+        ],
+        "Tityra": [
+          "blttit1"
+        ]
+      },
+      "Troglodytidae": {
+        "Campylorhynchus": [
+          "thlwre1"
+        ],
+        "Cantorchilus": [
+          "fabwre1"
+        ]
+      },
+      "Turdidae": [
+        "crbthr1",
+        "rubthr1"
+      ],
+      "Tyrannidae": {
+        "Camptostoma": [
+          "sobtyr1"
+        ],
+        "Casiornis": [
+          "rufcas2"
+        ],
+        "Cnemotriccus": [
+          "fusfly1"
+        ],
+        "Corythopis": [
+          "souant1"
+        ],
+        "Elaenia": [
+          "larela1",
+          "lesela1",
+          "yebela1"
+        ],
+        "Hemitriccus": [
+          "pvttyr1"
+        ],
+        "Inezia": [
+          "platyr1"
+        ],
+        "Lathrotriccus": [
+          "eulfly1"
+        ],
+        "Legatus": [
+          "pirfly1"
+        ],
+        "Megarynchus": [
+          "bobfly1"
+        ],
+        "Myiarchus": [
+          "bncfly",
+          "shcfly1"
+        ],
+        "Myiopagis": [
+          "greela"
+        ],
+        "Myiozetetes": [
+          "rumfly1",
+          "socfly1"
+        ],
+        "Pitangus": [
+          "grekis"
+        ],
+        "Poecilotriccus": [
+          "ruftof1"
+        ],
+        "Tolmomyias": [
+          "yeofly1"
+        ],
+        "Tyrannus": [
+          "fotfly",
+          "trokin"
+        ]
+      },
+      "Vireonidae": [
+        "ashgre1"
+      ]
+    },
+    "Pelecaniformes": {
+      "Ardeidae": {
+        "Butorides": [
+          "strher2"
+        ],
+        "Tigrisoma": [
+          "ruther1"
+        ]
+      },
+      "Threskiornithidae": [
+        "bunibi1",
+        "pluibi1"
+      ]
+    },
+    "Piciformes": {
+      "Picidae": {
+        "Colaptes": [
+          "camfli1"
+        ],
+        "Dryocopus": [
+          "linwoo1"
+        ],
+        "Melanerpes": [
+          "whiwoo1"
+        ],
+        "Picumnus": [
+          "whwpic1"
+        ]
+      },
+      "Ramphastidae": [
+        "toctou1"
+      ]
+    },
+    "Psittaciformes": {
+      "Amazona": [
+        "bufpar",
+        "orwpar"
+      ],
+      "Anodorhynchus": [
+        "hyamac1"
+      ],
+      "Ara": [
+        "baymac",
+        "ragmac1"
+      ],
+      "Aratinga": [
+        "bkhpar"
+      ],
+      "Brotogeris": [
+        "yecpar"
+      ],
+      "Pionus": [
+        "schpar1"
+      ],
+      "Primolius": [
+        "yecmac"
+      ],
+      "Pyrrhura": [
+        "mabpar"
+      ],
+      "Thectocercus": [
+        "bucpar"
+      ]
+    },
+    "Strigiformes": {
+      "Strigidae": {
+        "Asio": [
+          "strowl1"
+        ],
+        "Athene": [
+          "burowl"
+        ],
+        "Glaucidium": [
+          "fepowl"
+        ],
+        "Megascops": [
+          "trsowl"
+        ]
+      },
+      "Tytonidae": [
+        "brnowl"
+      ]
+    },
+    "Tinamiformes": {
+      "Crypturellus": [
+        "smbtin1",
+        "tattin1",
+        "undtin1"
+      ],
+      "Taoniscus": [
+        "dwatin1"
+      ]
+    }
+  },
+  "Insecta": {
+    "Hemiptera": {
+      "Guyalna": [
+        "1161364"
+      ],
+      "Quesada": [
+        "244024"
+      ]
+    },
+    "Orthoptera": [
+      "760266"
+    ],
+    "Unassigned_Order": [
+      "47158son01",
+      "47158son02",
+      "47158son03",
+      "47158son04",
+      "47158son05",
+      "47158son06",
+      "47158son07",
+      "47158son08",
+      "47158son09",
+      "47158son10",
+      "47158son11",
+      "47158son12",
+      "47158son13",
+      "47158son14",
+      "47158son15",
+      "47158son16",
+      "47158son17",
+      "47158son18",
+      "47158son19",
+      "47158son20",
+      "47158son21",
+      "47158son22",
+      "47158son23",
+      "47158son24",
+      "47158son25"
+    ]
+  },
+  "Mammalia": {
+    "Artiodactyla": [
+      "74113"
+    ],
+    "Carnivora": {
+      "Canidae": [
+        "47144"
+      ],
+      "Felidae": [
+        "41970"
+      ]
+    },
+    "Perissodactyla": [
+      "209233"
+    ],
+    "Primates": {
+      "Atelidae": [
+        "43435"
+      ],
+      "Callitrichidae": [
+        "74580"
+      ],
+      "Cebidae": [
+        "516975"
+      ],
+      "Pitheciidae": [
+        "738183"
+      ]
+    }
+  },
+  "Reptilia": [
+    "116570"
+  ]
+}

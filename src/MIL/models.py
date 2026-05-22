@@ -18,7 +18,10 @@ def extract_positive_probas(predict_proba_output):
 
 def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, n_iter):
     xgb_device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+    # Force la libération totale si le GPU est encore utilisé
+    import torch
+    torch.cuda.empty_cache()
+
     if any(c.startswith('perch_') for c in df_focal_windows.columns):
         audio_cols = [c for c in df_focal_windows.columns if c.startswith('perch_')]
         print(f"[*] Mode Perch détecté. Dimension des features : {len(audio_cols)}")
@@ -26,13 +29,37 @@ def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, n_iter
         audio_cols = [c for c in df_focal_windows.columns if any(k in c for k in ['mfcc', 'delta', 'centroid', 'zcr', 'bp_ratio', 'rms', 'flatness'])]
         print(f"[*] Mode Tabulaire détecté. Dimension des features : {len(audio_cols)}")
 
-    xgb_params = {
-        'objective': 'binary:logistic', 'tree_method': 'hist', 'device': xgb_device, 
-        'random_state': 42, 'base_score': 0.5,
-        'max_depth': 5,
-        'colsample_bytree': 0.6,
-        'subsample': 0.8
-    }
+    if any(c.startswith('perch_') for c in df_focal_windows.columns):
+        audio_cols = [c for c in df_focal_windows.columns if c.startswith('perch_')]
+        print(f"[*] Mode Perch détecté. Dimension des features : {len(audio_cols)}")
+        
+        # Paramètres légers pour le GPU
+        xgb_params = {
+            'objective': 'binary:logistic', 
+            'tree_method': 'hist', 
+            'device': 'cuda',
+            'random_state': 42, 
+            'base_score': 0.5,
+            'max_depth': 3,
+            'colsample_bytree': 0.333,
+            'subsample': 0.8
+        }
+
+    else:
+        audio_cols = [c for c in df_focal_windows.columns if any(k in c for k in ['mfcc', 'delta', 'centroid', 'zcr', 'bp_ratio', 'rms', 'flatness'])]
+        print(f"[*] Mode Tabulaire détecté. Dimension des features : {len(audio_cols)}")
+        
+        xgb_params = {
+            'objective': 'binary:logistic', 
+            'tree_method': 'hist', 
+            'device': xgb_device, 
+            'random_state': 42, 
+            'base_score': 0.5,
+            'max_depth': 5,
+            'colsample_bytree': 0.6,
+            'subsample': 0.8
+        }
+
     lgb_params = {
         'n_estimators': 300, 'learning_rate': 0.05, 'random_state': 42, 'n_jobs': -1,
         'max_depth': 5, 

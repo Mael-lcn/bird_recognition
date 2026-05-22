@@ -1,5 +1,8 @@
 import torch
 import torchaudio
+import gc
+import torch
+import tensorflow as tf
 
 from perch_hoplite.zoo import model_configs
 
@@ -113,16 +116,28 @@ class PerchFeatureExtractor:
     def extract_features_batch(self, y_chunks_tensor):
         # 1. Gestion de l'augmentation de données (comme avant)
         y_chunks_tensor = y_chunks_tensor.to(self.device)
-        if self.aug_mode == "noise_light": 
+        if self.aug_mode == "noise_light":
             y_chunks_tensor = self.add_background_noise(y_chunks_tensor, 0.01)
         elif self.aug_mode == "noise_heavy": 
             y_chunks_tensor = self.add_background_noise(y_chunks_tensor, 0.04)
 
         # Conversion GPU (Torch) -> CPU (Numpy)
         y_np = y_chunks_tensor.cpu().numpy()
-        
+
         # Extraction via Perch (accepte les batchs directement)
         outputs = self.model.embed(y_np)
-        
+
         # On renvoie uniquement l'embedding (batch_size, 1536)
-        return outputs.embeddings
+        return outputs.embeddings[:, 0, :]
+
+    def release_gpu(self):
+        print("[*] Libération élégante de la mémoire GPU (TensorFlow/Torch)...")
+        # 1. Supprime le modèle de la mémoire
+        del self.model
+        # 2. Force le nettoyage de Python
+        gc.collect()
+        # 3. Vide le cache Torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        tf.keras.backend.clear_session()

@@ -48,7 +48,7 @@ def main():
 
     if args.feature_mode == "perch":
         ExtractorClass = PerchFeatureExtractor
-        MAX_GPU_CHUNKS = 64
+        MAX_GPU_CHUNKS = 16
     else:
         ExtractorClass = TorchFeatureExtractor
         MAX_GPU_CHUNKS = 128
@@ -109,6 +109,10 @@ def main():
         first_batch = False
 
     print(f"[+] Extraction terminée ! {total_chunks} chunks conditionnels générés.")
+
+    extractor_clean.release_gpu()
+    extractor_light.release_gpu()
+    extractor_heavy.release_gpu()
 
     df_focal_win = pd.read_csv(csv_temp_path, low_memory=False)
     for col in df_focal_win.columns:

@@ -84,8 +84,6 @@ def build_soundscape_dataset(df_labels, audio_dir, feature_mode="tabular"):
         extractor = PerchFeatureExtractor(aug_mode="none")
     else:
         extractor = TorchFeatureExtractor(aug_mode="none")
-    all_feats = []
-    extractor = TorchFeatureExtractor(aug_mode="none")
 
     for filename in tqdm(df_labels['filename'].unique()):
         path = Path(audio_dir) / filename
