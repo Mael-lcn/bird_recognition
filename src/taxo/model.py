@@ -64,31 +64,27 @@ class HierarchicalSVM:
         return np.exp(final_log_probs)
 
 def train_kaggle_pipeline(df_focal_windows, df_soundscapes_feat, encoder, args):
-    # Détection automatique des colonnes
-    if any(c.startswith('perch_') for c in df_focal_windows.columns):
-        audio_cols = [c for c in df_focal_windows.columns if c.startswith('perch_')]
-    else:
-        audio_cols = [c for c in df_focal_windows.columns if any(k in c for k in ['mfcc', 'delta', 'centroid', 'zcr', 'bp_ratio', 'rms', 'flatness'])]
+    audio_cols = [c for c in df_focal_windows.columns if any(k in c for k in ['mfcc', 'delta', 'centroid', 'zcr', 'bp_ratio', 'rms', 'flatness'])]
 
     print(f"[*] Entraînement Hierarchical SVM avec {len(audio_cols)} features...")
 
-    # Préparation X et Y (Y doit être DataFrame pour votre SVM)
     X_train = df_focal_windows[audio_cols]
     y_raw = encoder.transform([[lbl for lbl in str(x).split(';') if lbl] for x in df_focal_windows['target_multi']])
     Y_train = pd.DataFrame(y_raw, columns=encoder.classes_)
 
-    # Instanciation et Fit
     h_svm = HierarchicalSVM(args)
     h_svm.fit(X_train, Y_train)
 
-    # Prédictions sur Soundscapes
     y_soundscape_multi = encoder.transform([[lbl for lbl in str(x).split(';') if lbl] for x in df_soundscapes_feat['target_multi']])
     val_prob = h_svm.predict_proba(df_soundscapes_feat[audio_cols])
+
+    # Sécurisation du val_end_sec
+    val_end_sec = df_soundscapes_feat['end_sec'].values if 'end_sec' in df_soundscapes_feat.columns else np.zeros(len(df_soundscapes_feat))
 
     return {
         'model': h_svm, 
         'val_prob': val_prob, 
         'val_true': y_soundscape_multi,
         'val_filename': df_soundscapes_feat['filename'].values,
-        'val_end_sec': np.zeros(len(df_soundscapes_feat))
+        'val_end_sec': val_end_sec
     }

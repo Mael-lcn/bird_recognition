@@ -1,5 +1,6 @@
 import pandas as pd
 import joblib
+import torch
 from pathlib import Path
 from tqdm import tqdm
 from torch.utils.data import DataLoader
@@ -7,9 +8,8 @@ from sklearn.preprocessing import MultiLabelBinarizer
 
 # Importations locales
 from config import parse_arguments
-from dataset import FocalAudioDataset, focal_collate_fn, build_soundscape_dataset
+from dataset import FocalAudioDataset, build_soundscape_dataset
 from features import TorchFeatureExtractor
-
 from model import train_kaggle_pipeline
 from metrics import print_full_report, generate_class_analysis, optimize_f1_thresholds, export_worst_errors
 
@@ -36,7 +36,6 @@ def main():
 
     extractor = TorchFeatureExtractor()
 
-    # 3. Extraction des Features (Le pont manquant)
     print("\n--- EXTRACTION DES FEATURES ---")
 
     # A. Soundscapes
@@ -56,7 +55,8 @@ def main():
         for i in range(len(meta['file_id'])):
             feat_dict = {extractor.feat_names[j]: feats[i, j] for j in range(len(extractor.feat_names))}
             for key in meta:
-                feat_dict[key] = meta[key][i]
+                val = meta[key][i]
+                feat_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
             focal_feats.append(feat_dict)
 
     df_focal_win = pd.DataFrame(focal_feats)
@@ -66,7 +66,6 @@ def main():
     mlb.fit([[c] for c in official_classes])
 
     print("\n--- ENTRAÎNEMENT DU PIPELINE ---")
-    # Appel du Hierarchical SVM
     results = train_kaggle_pipeline(df_focal_win, df_snd_feat, mlb, args)
 
     # 5. Métriques et Sauvegarde
