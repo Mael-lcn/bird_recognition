@@ -6,6 +6,8 @@ from cuml.svm import SVC
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import StandardScaler
 
+
+
 class HierarchicalSVM:
     def __init__(self, config):
         self.config = config
@@ -94,7 +96,7 @@ class HierarchicalSVM:
                         for c in [s for s in flat_leaves if s in self.species_cols]:
                             final_log_probs[indices, self.species_cols.index(c)] = new_log_probs
             else:
-                # Si le nœud n'a pas été entraîné faute de données, les probabilités parentes coulent vers les enfants
+                # Si le noeud n'a pas été entraîné faute de données, les probabilités parentes coulent vers les enfants
                 for k, v in node_dict.items():
                     if isinstance(v, dict): 
                         predict_node(k, v, current_X, current_log_probs, indices)

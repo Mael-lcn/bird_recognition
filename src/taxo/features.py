@@ -20,7 +20,7 @@ class TorchFeatureExtractor:
     def extract_features_batch(self, y_chunks_tensor):
         with torch.no_grad():
             y_chunks_tensor = y_chunks_tensor.to(self.device)
-            # Filtre Passe-haut rigoureux
+            # Filtre Passe-haut
             y_filtered = F.highpass_biquad(y_chunks_tensor, sample_rate=self.sr, cutoff_freq=1000.0)
             
             mfcc = self.mfcc_transform(y_filtered)
